@@ -3,14 +3,21 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
 
 from app.config import settings
-from app.models import CandidateWord, LLMOverrideConfig, VocabCard, utc_now_iso
+from app.models import (
+    CandidateWord,
+    LLMOverrideConfig,
+    LLMTestResponse,
+    VocabCard,
+    utc_now_iso,
+)
 
 SYSTEM_PROMPT = """你是一位面向中国英语初学者的资深英语词汇教练。
 用户目前的英语水平在大学英语四级（CET-4）以下，正在通过阅读 X（Twitter）上科技、AI、游戏、音乐、生活类的真实英文推文来积累高频实用词汇。
@@ -38,6 +45,33 @@ SYSTEM_PROMPT = """你是一位面向中国英语初学者的资深英语词汇�
 - ignore：纯人名、品牌名、无实际学习价值的拼写错误或乱码"""
 
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+PLACEHOLDER_API_KEYS = {"your_deepseek_api_key_here"}
+
+
+def _clean_api_key(value: str | None) -> str:
+    key = (value or "").strip()
+    return "" if key in PLACEHOLDER_API_KEYS else key
+
+
+def _build_openai_chat_endpoint(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    return f"{normalized}/chat/completions"
+
+
+def _build_openai_models_endpoint(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        normalized = normalized[: -len("/chat/completions")]
+    return f"{normalized}/models"
+
+
+def _build_openai_headers(api_key: str) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    return headers
 
 
 def _is_local_or_private_endpoint(base_url: str) -> bool:
@@ -51,6 +85,79 @@ def _is_local_or_private_endpoint(base_url: str) -> bool:
         return ip.is_loopback or ip.is_private
     except ValueError:
         return False
+
+
+def _resolve_llm_config(
+    override: LLMOverrideConfig | None,
+) -> tuple[Literal["openai_compatible", "gemini"], str, str, str]:
+    """Resolve effective provider, API key, base URL, and model from override or env defaults."""
+    raw_provider = (override.provider if override and override.provider else None) or settings.llm_provider
+    provider: Literal["openai_compatible", "gemini"] = "gemini" if raw_provider == "gemini" else "openai_compatible"
+
+    if provider == "gemini":
+        api_key = (
+            _clean_api_key(override.api_key if override else None)
+            or _clean_api_key(settings.gemini_api_key)
+            or _clean_api_key(settings.llm_api_key)
+        )
+        model = ((override.model or "").strip() if override else "") or settings.gemini_model
+        return provider, api_key, "https://generativelanguage.googleapis.com/v1beta", model
+
+    override_base = (override.base_url or "").strip() if override else ""
+    base_url = override_base or settings.llm_base_url.strip()
+    model = ((override.model or "").strip() if override else "") or settings.llm_model
+    override_key = _clean_api_key(override.api_key if override else None)
+
+    if override_key:
+        api_key = override_key
+    elif (
+        override_base
+        and override_base.rstrip("/") != settings.llm_base_url.strip().rstrip("/")
+        and _is_local_or_private_endpoint(base_url)
+    ):
+        # Avoid leaking a cloud API key from .env to an explicitly overridden local endpoint.
+        api_key = ""
+    else:
+        api_key = _clean_api_key(settings.llm_api_key)
+
+    return provider, api_key, base_url, model
+
+
+def _extract_error_detail(resp: httpx.Response) -> str:
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                return str(err["message"])
+            if isinstance(err, str) and err:
+                return err
+            if data.get("detail"):
+                return str(data["detail"])
+            if data.get("message"):
+                return str(data["message"])
+    except Exception:
+        pass
+    text = (resp.text or "").strip()
+    return text[:200] if text else f"HTTP {resp.status_code}"
+
+
+async def _fetch_openai_models(
+    client: httpx.AsyncClient,
+    base_url: str,
+    headers: dict[str, str],
+) -> list[str]:
+    try:
+        resp = await client.get(_build_openai_models_endpoint(base_url), headers=headers, timeout=5.0)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return []
+        return [str(m["id"]) for m in items if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        return []
 
 
 def _build_user_prompt(batch: list[CandidateWord]) -> str:
@@ -110,10 +217,8 @@ async def _call_openai_compatible(
     base_url: str,
     model: str,
 ) -> dict[str, Any]:
-    endpoint = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    endpoint = _build_openai_chat_endpoint(base_url)
+    headers = _build_openai_headers(api_key)
 
     body: dict[str, Any] = {
         "model": model,
@@ -166,6 +271,291 @@ async def _call_gemini(
     return _extract_json_object(content)
 
 
+async def _test_openai_compatible_connection(
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> LLMTestResponse:
+    parsed_url = urlparse(base_url)
+    is_local = _is_local_or_private_endpoint(base_url)
+    endpoint = _build_openai_chat_endpoint(base_url) if base_url else ""
+
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint or base_url,
+            latency_ms=0,
+            is_local=is_local,
+            message="Base URL 格式无效，请以 http:// 或 https:// 开头（例如 http://localhost:11434/v1）。",
+        )
+    if not model:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model="",
+            endpoint=endpoint,
+            latency_ms=0,
+            is_local=is_local,
+            message="请先填写模型名称（例如 deepseek-r1:7b 或 deepseek-chat）。",
+        )
+    if not api_key and not is_local:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=0,
+            is_local=False,
+            message="尚未配置云端 API Key；若连接本地自建 DeepSeek，请将 Base URL 设为 http://localhost:11434/v1 等本地/局域网地址即可免 Key。",
+        )
+
+    headers = _build_openai_headers(api_key)
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+        "temperature": 0,
+        "max_tokens": 64,
+    }
+    timeout = 60.0 if is_local else 30.0
+    started = time.perf_counter()
+
+    try:
+        async with _create_async_client(bypass_proxy=is_local, timeout=timeout) as client:
+            resp = await client.post(endpoint, headers=headers, json=body)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+
+            if resp.status_code == 401:
+                return LLMTestResponse(
+                    ok=False,
+                    provider="openai_compatible",
+                    model=model,
+                    endpoint=endpoint,
+                    latency_ms=latency_ms,
+                    is_local=is_local,
+                    message="API Key 无效或未通过鉴权（HTTP 401），请检查密钥配置。",
+                )
+
+            if resp.status_code >= 400:
+                available_models = (
+                    await _fetch_openai_models(client, base_url, headers)
+                    if resp.status_code in (400, 404, 422)
+                    else []
+                )
+                detail = _extract_error_detail(resp)
+                if resp.status_code == 404 and available_models and model not in available_models:
+                    models_hint = "、".join(available_models[:8])
+                    msg = f'模型 "{model}" 未找到（HTTP 404），当前服务可用模型：{models_hint}'
+                elif resp.status_code == 404 and not base_url.strip().rstrip("/").endswith(("/v1", "/chat/completions")):
+                    msg = (
+                        f"接口返回 404（{endpoint}），请确认 Base URL 是否缺少 /v1"
+                        "（例如 Ollama 默认为 http://localhost:11434/v1）。"
+                    )
+                else:
+                    msg = f"模型接口返回错误（HTTP {resp.status_code}）：{detail}"
+                return LLMTestResponse(
+                    ok=False,
+                    provider="openai_compatible",
+                    model=model,
+                    endpoint=endpoint,
+                    latency_ms=latency_ms,
+                    is_local=is_local,
+                    message=msg,
+                    available_models=available_models,
+                )
+
+            try:
+                data = resp.json()
+            except ValueError:
+                return LLMTestResponse(
+                    ok=False,
+                    provider="openai_compatible",
+                    model=model,
+                    endpoint=endpoint,
+                    latency_ms=latency_ms,
+                    is_local=is_local,
+                    message="接口返回了非 JSON 内容，请检查 Base URL 是否正确（如是否缺少 /v1）。",
+                )
+    except httpx.ConnectError:
+        local_hint = (
+            f"无法连接到本地服务 {endpoint}，请确认 Ollama / vLLM / LM Studio 已启动且端口正确"
+            "（WSL2 环境若服务运行在 Windows 宿主机，请开启镜像网络或改用宿主机局域网 IP）。"
+            if is_local
+            else f"无法连接到接口地址 {endpoint}，请检查网络连通性或代理配置。"
+        )
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_local=is_local,
+            message=local_hint,
+        )
+    except httpx.TimeoutException:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_local=is_local,
+            message=f"请求模型 {model} 超时（>{int(timeout)}s），若本地首次加载大模型较慢可稍后重试。",
+        )
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_local=is_local,
+            message=f"请求异常：{exc}",
+        )
+
+    if isinstance(data, dict) and data.get("error") and not data.get("choices"):
+        err = data["error"]
+        detail = err.get("message") if isinstance(err, dict) else str(err)
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=latency_ms,
+            is_local=is_local,
+            message=f"模型接口返回错误：{detail}",
+        )
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return LLMTestResponse(
+            ok=False,
+            provider="openai_compatible",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=latency_ms,
+            is_local=is_local,
+            message="接口响应格式不符合 OpenAI Chat Completions 规范（缺少 choices 字段）。",
+        )
+
+    message_obj = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    raw_content = str((message_obj or {}).get("content") or "")
+    reasoning_content = str((message_obj or {}).get("reasoning_content") or "")
+    cleaned = THINK_TAG_RE.sub("", raw_content).strip()
+    preview = cleaned[:80] if cleaned else ("（模型已响应推理输出）" if (raw_content or reasoning_content) else "（模型已响应）")
+
+    scope_label = "本地模型" if is_local else "模型"
+    return LLMTestResponse(
+        ok=True,
+        provider="openai_compatible",
+        model=model,
+        endpoint=endpoint,
+        latency_ms=latency_ms,
+        is_local=is_local,
+        message=f"连通成功（耗时 {latency_ms} ms），{scope_label} {model} 响应正常。",
+        reply_preview=preview,
+    )
+
+
+async def _test_gemini_connection(api_key: str, model: str) -> LLMTestResponse:
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    if not model:
+        return LLMTestResponse(
+            ok=False,
+            provider="gemini",
+            model="",
+            endpoint=endpoint,
+            latency_ms=0,
+            is_local=False,
+            message="请先填写 Gemini 模型名称（例如 gemini-2.5-flash）。",
+        )
+    if not api_key:
+        return LLMTestResponse(
+            ok=False,
+            provider="gemini",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=0,
+            is_local=False,
+            message="尚未配置 Gemini API Key，请先填写后再测试连通性。",
+        )
+
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 32},
+    }
+    started = time.perf_counter()
+    try:
+        async with _create_async_client(timeout=30.0) as client:
+            resp = await client.post(endpoint, params={"key": api_key}, json=body)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            if resp.status_code >= 400:
+                detail = _extract_error_detail(resp)
+                return LLMTestResponse(
+                    ok=False,
+                    provider="gemini",
+                    model=model,
+                    endpoint=endpoint,
+                    latency_ms=latency_ms,
+                    is_local=False,
+                    message=f"Gemini 接口返回异常（HTTP {resp.status_code}）：{detail}",
+                )
+            data = resp.json()
+    except httpx.TimeoutException:
+        return LLMTestResponse(
+            ok=False,
+            provider="gemini",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_local=False,
+            message="连接 Gemini API 超时（>30s），请检查网络或代理设置。",
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        return LLMTestResponse(
+            ok=False,
+            provider="gemini",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_local=False,
+            message=f"连接 Gemini API 失败：{exc}",
+        )
+
+    candidates = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(candidates, list) or not candidates:
+        return LLMTestResponse(
+            ok=False,
+            provider="gemini",
+            model=model,
+            endpoint=endpoint,
+            latency_ms=latency_ms,
+            is_local=False,
+            message="Gemini 响应中未包含 candidates 字段。",
+        )
+    parts = ((candidates[0].get("content") or {}).get("parts") or []) if isinstance(candidates[0], dict) else []
+    preview = str(parts[0].get("text", "")).strip()[:80] if parts and isinstance(parts[0], dict) else "（模型已响应）"
+    return LLMTestResponse(
+        ok=True,
+        provider="gemini",
+        model=model,
+        endpoint=endpoint,
+        latency_ms=latency_ms,
+        is_local=False,
+        message=f"连通成功（耗时 {latency_ms} ms），Gemini 模型 {model} 响应正常。",
+        reply_preview=preview,
+    )
+
+
+async def test_llm_connection(override: LLMOverrideConfig | None = None) -> LLMTestResponse:
+    """Probe the configured LLM provider with a minimal completion request."""
+    provider, api_key, base_url, model = _resolve_llm_config(override)
+    if provider == "gemini":
+        return await _test_gemini_connection(api_key=api_key, model=model)
+    return await _test_openai_compatible_connection(api_key=api_key, base_url=base_url, model=model)
+
+
 async def enrich_candidates(
     candidates: list[CandidateWord],
     override: LLMOverrideConfig | None = None,
@@ -173,7 +563,7 @@ async def enrich_candidates(
     if not candidates:
         return [], []
 
-    provider = (override.provider if override and override.provider else None) or settings.llm_provider
+    provider, api_key, base_url, model = _resolve_llm_config(override)
 
     cards: list[VocabCard] = []
     skipped_ignored: list[str] = []
@@ -184,15 +574,10 @@ async def enrich_candidates(
         batch = candidates[i : i + batch_size]
 
         if provider == "gemini":
-            api_key = (override.api_key if override and override.api_key else None) or settings.gemini_api_key or settings.llm_api_key
-            model = (override.model if override and override.model else None) or settings.gemini_model
             if not api_key:
                 raise ValueError("尚未配置 Gemini API Key，请在“设置”中填写或在 backend/.env 配置 GEMINI_API_KEY。")
             parsed = await _call_gemini(batch, api_key=api_key, model=model)
         else:
-            api_key = (override.api_key if override and override.api_key else None) or settings.llm_api_key
-            base_url = (override.base_url if override and override.base_url else None) or settings.llm_base_url
-            model = (override.model if override and override.model else None) or settings.llm_model
             if not api_key and not _is_local_or_private_endpoint(base_url):
                 raise ValueError(
                     "尚未配置 DeepSeek / OpenAI 兼容 API Key，请在“设置”中填写或在 backend/.env 配置 LLM_API_KEY（若使用本地 Ollama/vLLM 等自建服务，请将 Base URL 设为 http://localhost:11434/v1 等本地地址即可免 Key）。"

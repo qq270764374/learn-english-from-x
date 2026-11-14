@@ -76,6 +76,26 @@ class EnrichRequest(BaseModel):
     auto_save: bool = True
 
 
+class LLMTestRequest(BaseModel):
+    """Payload for probing connectivity to the configured LLM provider."""
+
+    llm_config: LLMOverrideConfig | None = None
+
+
+class LLMTestResponse(BaseModel):
+    """Structured diagnostic result from testing an LLM endpoint."""
+
+    ok: bool
+    provider: Literal["openai_compatible", "gemini"]
+    model: str
+    endpoint: str
+    latency_ms: int
+    is_local: bool = False
+    message: str
+    reply_preview: str = ""
+    available_models: list[str] = Field(default_factory=list)
+
+
 class FSRSStateModel(BaseModel):
     due: str = Field(default_factory=utc_now_iso)
     stability: float = 0.0
@@ -140,10 +160,93 @@ class ObsidianExportRequest(BaseModel):
     vault_path: str | None = None
     subfolder: str = "X-Vocab"
     include_flashcards: bool = True
+    sr_deck_tag: str = "#flashcards/x-vocab"
+    sr_card_style: Literal["multiline", "bidirectional", "inline"] = "multiline"
+    sr_subdeck_by_category: bool = False
+    sr_seed_progress: bool = False
+    sr_include_audio: bool = False
+    sr_audio_autoplay: bool = False
+    tts_accent: Literal["en-US", "en-GB"] = "en-US"
 
 
 class ObsidianSyncResponse(BaseModel):
     target_dir: str
     written_count: int
     files: list[str]
+
+
+class ObsidianRestTestRequest(BaseModel):
+    """Payload for probing connectivity to the Obsidian Local REST API plugin."""
+
+    api_url: str | None = None
+    api_key: str | None = None
+
+
+class ObsidianRestTestResponse(BaseModel):
+    """Structured diagnostic result from probing Obsidian Local REST API."""
+
+    ok: bool
+    url: str
+    status_code: int | None = None
+    authenticated: bool = False
+    latency_ms: int = 0
+    plugin_version: str = ""
+    obsidian_version: str = ""
+    message: str
+
+
+class ObsidianRestSyncRequest(BaseModel):
+    """Payload for syncing vocabulary cards through Obsidian Local REST API."""
+
+    cards: list[VocabCard] | None = None
+    api_url: str | None = None
+    api_key: str | None = None
+    subfolder: str = "X-Vocab"
+    include_flashcards: bool = True
+    sr_deck_tag: str = "#flashcards/x-vocab"
+    sr_card_style: Literal["multiline", "bidirectional", "inline"] = "multiline"
+    sr_subdeck_by_category: bool = False
+    sr_seed_progress: bool = False
+    sr_include_audio: bool = False
+    sr_audio_autoplay: bool = False
+    tts_accent: Literal["en-US", "en-GB"] = "en-US"
+
+
+class ObsidianSrPullRequest(BaseModel):
+    """Payload for pulling Obsidian Spaced Repetition schedules back into FSRS state."""
+
+    mode: Literal["local_path", "rest_api"] = "local_path"
+    cards: list[VocabCard] | None = None
+    vault_path: str | None = None
+    api_url: str | None = None
+    api_key: str | None = None
+    subfolder: str = "X-Vocab"
+    apply_to_store: bool = True
+
+
+class ObsidianSrPullResponse(BaseModel):
+    """Diagnostic summary and updated cards returned after pulling SR comments."""
+
+    scanned_notes: int
+    notes_with_sr: int
+    updated_count: int
+    updated_words: list[str]
+    updated_cards: list[VocabCard]
+
+
+class ObsidianSrLaunchRequest(BaseModel):
+    """Payload for triggering an Obsidian Spaced Repetition command via Local REST API."""
+
+    api_url: str | None = None
+    api_key: str | None = None
+    command_id: str | None = None
+
+
+class ObsidianSrLaunchResponse(BaseModel):
+    """Result from executing an Obsidian Spaced Repetition plugin command."""
+
+    ok: bool
+    command_id: str
+    command_name: str = ""
+    message: str
 

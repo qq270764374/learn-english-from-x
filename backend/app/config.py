@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Optional Obsidian integration defaults
     obsidian_vault_dir: str = ""
     obsidian_subfolder: str = "X-Vocab"
+    obsidian_rest_url: str = ""
+    obsidian_rest_api_key: str = ""
 
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
     host: str = "127.0.0.1"

@@ -11,18 +11,42 @@ const statusMsg = document.getElementById("statusMsg");
 const creatorsList = document.getElementById("creatorsList");
 
 let activeCategory = "全部";
+let suppressAutoStatusOverwrite = false;
+let lastRenderedStopKey = "";
 
 function setStatus(text, isError = false) {
   statusMsg.textContent = text;
   statusMsg.style.color = isError ? "#a1260c" : "#2f3846";
 }
 
+function formatStopStatus(res) {
+  const captured = typeof res.autoScrollCaptured === "number" ? res.autoScrollCaptured : 0;
+  switch (res.autoScrollStopReason) {
+    case "target_reached":
+      return { text: `自动滚动完成，本次新采集 ${captured} 条推文。`, isError: false };
+    case "stalled":
+      return {
+        text: `已停止自动滚动：页面未继续加载更多推文（可能已到底部、需要登录或触发 X 限流），本次新采集 ${captured} 条。`,
+        isError: true,
+      };
+    case "already_seen_limit":
+      return {
+        text: `已停止自动滚动：连续多屏均为已收录推文，本次新采集 ${captured} 条。`,
+        isError: false,
+      };
+    case "manual":
+      return { text: `已停止自动滚动，本次新采集 ${captured} 条。`, isError: false };
+    default:
+      return null;
+  }
+}
+
 function refreshStatus() {
   chrome.runtime.sendMessage({ type: "GET_STATUS" }, (res) => {
-    if (!res) return;
+    if (chrome.runtime.lastError || !res) return;
     tweetCountBadge.textContent = `${res.total} 条`;
     captureToggle.checked = Boolean(res.captureEnabled);
-    if (res.backendUrl) {
+    if (res.backendUrl && document.activeElement !== backendUrlInput) {
       backendUrlInput.value = res.backendUrl;
     }
   });
@@ -35,11 +59,28 @@ function refreshStatus() {
     chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_STATE" }, (res) => {
       if (chrome.runtime.lastError || !res) return;
       if (res.autoScrollActive) {
+        suppressAutoStatusOverwrite = false;
+        lastRenderedStopKey = "";
         startAutoBtn.classList.add("hidden");
         stopAutoBtn.classList.remove("hidden");
+        if (res.autoScrollPhase === "waiting_load") {
+          setStatus(`正在等待 X.com 加载更多推文 (${res.autoScrollCaptured}/${res.autoScrollTarget})...`);
+        } else {
+          setStatus(`自动滚动采集中 (${res.autoScrollCaptured}/${res.autoScrollTarget})...`);
+        }
       } else {
         startAutoBtn.classList.remove("hidden");
         stopAutoBtn.classList.add("hidden");
+        if (!suppressAutoStatusOverwrite && res.autoScrollStopReason) {
+          const stopKey = `${res.autoScrollStopReason}:${res.autoScrollCaptured}:${res.autoScrollTarget}`;
+          if (stopKey !== lastRenderedStopKey) {
+            lastRenderedStopKey = stopKey;
+            const info = formatStopStatus(res);
+            if (info) {
+              setStatus(info.text, info.isError);
+            }
+          }
+        }
       }
     });
   });
@@ -74,6 +115,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
 
 captureToggle.addEventListener("change", () => {
   const enabled = captureToggle.checked;
+  suppressAutoStatusOverwrite = true;
   chrome.storage.local.set({ captureEnabled: enabled });
   sendToActiveXTab({ type: "SET_CAPTURE", enabled }, () => {
     setStatus(enabled ? "已开启英文推文采集，浏览即可自动收集。" : "已暂停采集。");
@@ -83,6 +125,8 @@ captureToggle.addEventListener("change", () => {
 startAutoBtn.addEventListener("click", () => {
   const targetCount = Number(scrollCountInput.value) || 30;
   captureToggle.checked = true;
+  suppressAutoStatusOverwrite = false;
+  lastRenderedStopKey = "";
   sendToActiveXTab({ type: "START_AUTO_SCROLL", targetCount }, (res) => {
     startAutoBtn.classList.add("hidden");
     stopAutoBtn.classList.remove("hidden");
@@ -91,10 +135,12 @@ startAutoBtn.addEventListener("click", () => {
 });
 
 stopAutoBtn.addEventListener("click", () => {
+  suppressAutoStatusOverwrite = false;
+  lastRenderedStopKey = "";
   sendToActiveXTab({ type: "STOP_AUTO_SCROLL" }, () => {
     startAutoBtn.classList.remove("hidden");
     stopAutoBtn.classList.add("hidden");
-    setStatus("已停止自动滚动。");
+    refreshStatus();
   });
 });
 
@@ -103,6 +149,7 @@ backendUrlInput.addEventListener("change", () => {
 });
 
 pushBtn.addEventListener("click", () => {
+  suppressAutoStatusOverwrite = true;
   setStatus("正在推送到本地学习工具...");
   chrome.runtime.sendMessage(
     { type: "PUSH_TO_BACKEND", backendUrl: backendUrlInput.value.trim() },
@@ -117,6 +164,7 @@ pushBtn.addEventListener("click", () => {
 });
 
 exportBtn.addEventListener("click", () => {
+  suppressAutoStatusOverwrite = true;
   chrome.runtime.sendMessage({ type: "EXPORT_JSON" }, (res) => {
     if (res && res.ok) {
       setStatus(`已导出 ${res.count} 条推文为 JSON 文件。`);
@@ -127,6 +175,7 @@ exportBtn.addEventListener("click", () => {
 });
 
 clearBtn.addEventListener("click", () => {
+  suppressAutoStatusOverwrite = true;
   chrome.runtime.sendMessage({ type: "CLEAR_TWEETS" }, () => {
     refreshStatus();
     setStatus("已清空浏览器缓存队列。");

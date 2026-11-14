@@ -102,6 +102,51 @@ export interface EnrichResponse {
   skipped_ignored: string[]
 }
 
+export interface LLMTestResponse {
+  ok: boolean
+  provider: LLMProvider
+  model: string
+  endpoint: string
+  latency_ms: number
+  is_local: boolean
+  message: string
+  reply_preview: string
+  available_models: string[]
+}
+
+export type ObsidianSyncMode = 'local_path' | 'rest_api'
+
+export type ObsidianSrCardStyle = 'multiline' | 'bidirectional' | 'inline'
+
+export interface ObsidianRestTestResponse {
+  ok: boolean
+  url: string
+  status_code?: number | null
+  authenticated: boolean
+  latency_ms: number
+  plugin_version: string
+  obsidian_version: string
+  message: string
+  via?: 'browser' | 'backend'
+}
+
+export interface ObsidianSrPullResult {
+  scanned_notes: number
+  notes_with_sr: number
+  updated_count: number
+  updated_words: string[]
+  updated_cards: VocabCard[]
+  via?: 'browser' | 'backend'
+}
+
+export interface ObsidianSrLaunchResult {
+  ok: boolean
+  command_id: string
+  command_name: string
+  message: string
+  via?: 'browser' | 'backend'
+}
+
 export interface UserSettings {
   llmProvider: LLMProvider
   llmApiKey: string
@@ -116,9 +161,18 @@ export interface UserSettings {
   dailyNewLimit: number
   ttsAccent: 'en-US' | 'en-GB'
   showContextOnFront: boolean
+  obsidianSyncMode: ObsidianSyncMode
   obsidianVaultPath: string
+  obsidianRestUrl: string
+  obsidianRestApiKey: string
   obsidianSubfolder: string
   obsidianIncludeFlashcards: boolean
+  obsidianSrDeckTag: string
+  obsidianSrCardStyle: ObsidianSrCardStyle
+  obsidianSrSubdeckByCategory: boolean
+  obsidianSrSyncProgress: boolean
+  obsidianSrAudio: boolean
+  obsidianSrAudioAutoplay: boolean
   obsidianAutoSync: boolean
 }
 
@@ -136,9 +190,18 @@ export const DEFAULT_SETTINGS: UserSettings = {
   dailyNewLimit: 15,
   ttsAccent: 'en-US',
   showContextOnFront: true,
+  obsidianSyncMode: 'local_path',
   obsidianVaultPath: '',
+  obsidianRestUrl: 'https://127.0.0.1:27124',
+  obsidianRestApiKey: '',
   obsidianSubfolder: 'X-Vocab',
   obsidianIncludeFlashcards: true,
+  obsidianSrDeckTag: '#flashcards/x-vocab',
+  obsidianSrCardStyle: 'multiline',
+  obsidianSrSubdeckByCategory: false,
+  obsidianSrSyncProgress: true,
+  obsidianSrAudio: true,
+  obsidianSrAudioAutoplay: true,
   obsidianAutoSync: false,
 }
 

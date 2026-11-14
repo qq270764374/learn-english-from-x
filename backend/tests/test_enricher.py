@@ -1,9 +1,12 @@
 import json
+from fastapi.testclient import TestClient
 import pytest
 import respx
 import httpx
 
-from app.llm.enricher import enrich_candidates
+from app.config import settings
+from app.llm.enricher import enrich_candidates, test_llm_connection
+from app.main import app
 from app.models import CandidateWord, LLMOverrideConfig, SampleContext
 
 
@@ -207,4 +210,110 @@ async def test_enrich_candidates_local_self_hosted_deepseek_without_api_key_and_
     assert cards[0].word == "subtle"
     assert cards[0].meaning_zh == "微妙的"
     assert ignored == []
+
+
+@pytest.mark.anyio
+async def test_test_llm_connection_local_deepseek_success(monkeypatch):
+    monkeypatch.setattr(settings, "llm_api_key", "sk-cloud-secret")
+    monkeypatch.setattr(settings, "llm_base_url", "https://api.deepseek.com/v1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "Authorization" not in request.headers
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["model"] == "deepseek-r1:7b"
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "<think>checking</think>\nOK"}}]},
+        )
+
+    with respx.mock:
+        route = respx.post("http://localhost:11434/v1/chat/completions").mock(side_effect=handler)
+        result = await test_llm_connection(
+            override=LLMOverrideConfig(
+                provider="openai_compatible",
+                api_key=None,
+                base_url="http://localhost:11434/v1",
+                model="deepseek-r1:7b",
+            )
+        )
+
+    assert route.called
+    assert result.ok is True
+    assert result.is_local is True
+    assert result.model == "deepseek-r1:7b"
+    assert result.reply_preview == "OK"
+
+
+@pytest.mark.anyio
+async def test_test_llm_connection_local_model_not_found_returns_available_models():
+    with respx.mock:
+        chat_route = respx.post("http://localhost:11434/v1/chat/completions").mock(
+            return_value=httpx.Response(404, json={"error": {"message": "model 'deepseek-r1:8b' not found"}})
+        )
+        models_route = respx.get("http://localhost:11434/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": "deepseek-r1:7b"}, {"id": "qwen2.5:7b"}]},
+            )
+        )
+        result = await test_llm_connection(
+            override=LLMOverrideConfig(
+                provider="openai_compatible",
+                api_key=None,
+                base_url="http://localhost:11434/v1",
+                model="deepseek-r1:8b",
+            )
+        )
+
+    assert chat_route.called
+    assert models_route.called
+    assert result.ok is False
+    assert result.is_local is True
+    assert result.available_models == ["deepseek-r1:7b", "qwen2.5:7b"]
+    assert "deepseek-r1:7b" in result.message
+
+
+@pytest.mark.anyio
+async def test_test_llm_connection_connect_error_local():
+    with respx.mock:
+        respx.post("http://127.0.0.1:11434/v1/chat/completions").mock(
+            side_effect=httpx.ConnectError("Connection refused")
+        )
+        result = await test_llm_connection(
+            override=LLMOverrideConfig(
+                provider="openai_compatible",
+                api_key=None,
+                base_url="http://127.0.0.1:11434/v1",
+                model="deepseek-r1:7b",
+            )
+        )
+
+    assert result.ok is False
+    assert result.is_local is True
+    assert "Ollama" in result.message
+
+
+def test_llm_test_endpoint_route():
+    client = TestClient(app)
+    with respx.mock:
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+        )
+        resp = client.post(
+            "/api/llm/test",
+            json={
+                "llm_config": {
+                    "provider": "openai_compatible",
+                    "api_key": None,
+                    "base_url": "http://localhost:11434/v1",
+                    "model": "deepseek-r1:7b",
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["is_local"] is True
+    assert payload["model"] == "deepseek-r1:7b"
 

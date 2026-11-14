@@ -480,6 +480,18 @@ a:hover {
   color: var(--ink-primary);
 }
 
+.speak-kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-muted);
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
 .tweet-quote-box {
   margin-top: 14px;
   padding: 15px 18px;
@@ -1052,6 +1064,70 @@ a:hover {
 .setup-guide ol {
   margin: 6px 0 0;
   padding-left: 18px;
+}
+
+.llm-test-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.llm-test-result {
+  margin-top: 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hairline);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.llm-test-result.success {
+  background: var(--sage-soft);
+  border-color: rgba(43, 110, 78, 0.25);
+  color: #1c4c35;
+}
+
+.llm-test-result.error {
+  background: var(--danger-soft);
+  border-color: rgba(168, 40, 28, 0.25);
+  color: #7d1d14;
+}
+
+.llm-test-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.llm-test-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.9;
+  word-break: break-all;
+}
+
+.llm-model-suggestions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(168, 40, 28, 0.16);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Responsive */

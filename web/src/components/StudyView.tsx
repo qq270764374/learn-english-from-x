@@ -2,7 +2,12 @@ import { BookOpen, Check, Eye, EyeOff, RotateCcw, Sparkles, Volume2, X } from 'l
 import { useEffect, useMemo, useState } from 'react'
 import { previewReviewIntervals, getCardStageLabel, type DueQueueResult } from '../services/srs'
 import type { RatingGrade, UserSettings, VocabCard } from '../types/vocab'
-import { categoryLabelZh, speakEnglishText, splitHighlightSegments } from '../utils/textHelpers'
+import {
+  categoryLabelZh,
+  speakEnglishText,
+  splitHighlightSegments,
+  warmUpSpeechSynthesis,
+} from '../utils/textHelpers'
 
 interface StudyViewProps {
   dueQueue: DueQueueResult
@@ -59,20 +64,36 @@ export function StudyView({
   }, [currentCard])
 
   useEffect(() => {
+    warmUpSpeechSynthesis()
+  }, [])
+
+  useEffect(() => {
     if (!currentCard || isModalOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+        return
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
 
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.key === ' ') {
         e.preventDefault()
         setFlippedCardId((prev) => (prev === currentCard.id ? null : currentCard.id))
         return
       }
-      if (e.key === 'r' || e.key === 'R') {
+      if (e.code === 'KeyR' || e.key === 'r' || e.key === 'R') {
         e.preventDefault()
         speakEnglishText(currentCard.word, settings.ttsAccent)
+        return
+      }
+      if (
+        (e.code === 'KeyS' || e.key === 's' || e.key === 'S') &&
+        (settings.showContextOnFront || isFlipped) &&
+        currentCard.sample_tweet
+      ) {
+        e.preventDefault()
+        speakEnglishText(currentCard.sample_tweet, settings.ttsAccent)
         return
       }
       if (isFlipped && ['1', '2', '3', '4'].includes(e.key)) {
@@ -83,7 +104,7 @@ export function StudyView({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentCard, isFlipped, isModalOpen, onRateCard, settings.ttsAccent])
+  }, [currentCard, isFlipped, isModalOpen, onRateCard, settings.showContextOnFront, settings.ttsAccent])
 
   const handleDemoClick = async () => {
     setLoadingDemo(true)
@@ -232,6 +253,7 @@ export function StudyView({
             >
               <Volume2 size={14} />
               发音 ({settings.ttsAccent === 'en-US' ? '美' : '英'})
+              <kbd className="speak-kbd">R</kbd>
             </button>
           </div>
         </div>
@@ -244,17 +266,17 @@ export function StudyView({
                 {currentCard.author_handle ? `@${currentCard.author_handle}` : 'X 原推文语境'}
               </span>
               <div className="pill-group">
-                {isFlipped && (
-                  <button
-                    id="btn-speak-tweet"
-                    type="button"
-                    className="speak-btn"
-                    onClick={() => speakEnglishText(currentCard.sample_tweet, settings.ttsAccent)}
-                  >
-                    <Volume2 size={13} />
-                    朗读整句
-                  </button>
-                )}
+                <button
+                  id="btn-speak-tweet"
+                  type="button"
+                  className="speak-btn"
+                  onClick={() => speakEnglishText(currentCard.sample_tweet, settings.ttsAccent)}
+                  title="朗读原推文整句（快捷键 S）"
+                >
+                  <Volume2 size={13} />
+                  朗读整句
+                  <kbd className="speak-kbd">S</kbd>
+                </button>
                 {currentCard.tweet_url && (
                   <a href={currentCard.tweet_url} target="_blank" rel="noreferrer">
                     查看原推 ↗
@@ -269,16 +291,25 @@ export function StudyView({
         )}
 
         {!isFlipped ? (
-          <div className="card-reveal-cta">
-            <button
-              id="btn-flip-card"
-              type="button"
-              className="btn btn-primary card-reveal-btn"
-              onClick={() => setFlippedCardId(currentCard.id)}
-            >
-              查看释义与语境记忆（空格键 Space）
-            </button>
-          </div>
+          <>
+            <div className="card-reveal-cta">
+              <button
+                id="btn-flip-card"
+                type="button"
+                className="btn btn-primary card-reveal-btn"
+                onClick={() => setFlippedCardId(currentCard.id)}
+              >
+                查看释义与语境记忆（空格键 Space）
+              </button>
+            </div>
+            <div className="card-footer-actions">
+              <span>
+                快捷键：Space 翻卡 · R 朗读单词
+                {settings.showContextOnFront && currentCard.sample_tweet ? ' · S 朗读整句' : ''}
+              </span>
+              <span>已复习 {currentCard.fsrs.reps} 次</span>
+            </div>
+          </>
         ) : (
           <div className="card-back-section">
             <p className="meaning-zh">{currentCard.meaning_zh}</p>
@@ -312,7 +343,10 @@ export function StudyView({
             )}
 
             <div className="card-footer-actions">
-              <span>快捷键：1~4 评分 · R 朗读单词</span>
+              <span>
+                快捷键：1~4 评分 · Space 翻回 · R 朗读单词
+                {currentCard.sample_tweet ? ' · S 朗读整句' : ''}
+              </span>
               <span>已复习 {currentCard.fsrs.reps} 次</span>
             </div>
           </div>

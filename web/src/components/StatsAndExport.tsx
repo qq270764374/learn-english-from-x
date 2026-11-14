@@ -1,6 +1,12 @@
-import { Cloud, Download, FileText, FolderUp, Search, Settings, Trash2, Volume2 } from 'lucide-react'
+import { BookOpenCheck, Cloud, Download, FileText, FolderUp, RefreshCw, Search, Settings, Trash2, Volume2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { exportApkgFile, exportObsidianZip, syncObsidianVault } from '../services/api'
+import {
+  launchObsidianSpacedRepetition,
+  normalizeSrDeckTag,
+  pullObsidianSrProgress,
+  syncObsidianRest,
+} from '../services/obsidianRest'
 import { mergeSyncStates } from '../services/googleDrive'
 import { formatIntervalZh, getCardStageLabel, toLocalDateKey } from '../services/srs'
 import type { SyncStateDocument, UserSettings, VocabCard } from '../types/vocab'
@@ -22,6 +28,7 @@ interface StatsAndExportProps {
   onMarkKnown: (card: VocabCard) => void
   onRestoreKnownOrIgnored: (word: string) => void
   onImportStateBackup: (merged: SyncStateDocument) => void
+  onMergePulledCards?: (updatedCards: VocabCard[]) => void
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void
 }
 
@@ -36,6 +43,7 @@ export function StatsAndExport({
   onMarkKnown,
   onRestoreKnownOrIgnored,
   onImportStateBackup,
+  onMergePulledCards,
   onNotify,
 }: StatsAndExportProps) {
   const [search, setSearch] = useState('')
@@ -43,6 +51,8 @@ export function StatsAndExport({
   const [deckName, setDeckName] = useState('LearnEnglishFromX')
   const [exportingApkg, setExportingApkg] = useState(false)
   const [syncingObsidian, setSyncingObsidian] = useState(false)
+  const [pullingObsidianSr, setPullingObsidianSr] = useState(false)
+  const [launchingObsidianSr, setLaunchingObsidianSr] = useState(false)
   const [exportingObsidianZip, setExportingObsidianZip] = useState(false)
   const [flashcardOverride, setFlashcardOverride] = useState<boolean | null>(null)
   const includeFlashcards = flashcardOverride ?? settings.obsidianIncludeFlashcards
@@ -105,9 +115,56 @@ export function StatsAndExport({
       onNotify('当前词库为空，请先加载示例词卡或采集生成后再写入 Obsidian。', 'error')
       return
     }
+    const subfolder = settings.obsidianSubfolder.trim() || 'X-Vocab'
+    const srDeckTag = normalizeSrDeckTag(settings.obsidianSrDeckTag)
+    const srCardStyle = settings.obsidianSrCardStyle || 'multiline'
+    const srSubdeckByCategory = settings.obsidianSrSubdeckByCategory ?? false
+    const srSeedProgress = settings.obsidianSrSyncProgress ?? true
+    const srIncludeAudio = settings.obsidianSrAudio ?? true
+    const srAudioAutoplay = settings.obsidianSrAudioAutoplay ?? true
+    const ttsAccent = settings.ttsAccent || 'en-US'
+
+    if (settings.obsidianSyncMode === 'rest_api') {
+      const apiUrl = settings.obsidianRestUrl.trim()
+      const apiKey = settings.obsidianRestApiKey.trim()
+      if (!apiUrl || !apiKey) {
+        onOpenSettings()
+        onNotify('请先在设置中填写 Obsidian Local REST API 地址与 API Key。', 'info')
+        return
+      }
+      setSyncingObsidian(true)
+      try {
+        const result = await syncObsidianRest({
+          cards: syncState.cards,
+          apiUrl,
+          apiKey,
+          subfolder,
+          includeFlashcards,
+          srDeckTag,
+          srCardStyle,
+          srSubdeckByCategory,
+          srSeedProgress,
+          srIncludeAudio,
+          srAudioAutoplay,
+          ttsAccent,
+          backendOnline,
+        })
+        const channelLabel = result.via === 'browser' ? '浏览器直连' : '后端通道'
+        onNotify(
+          `已通过 Local REST API（${channelLabel}）同步 ${result.written_count} 个 Obsidian Markdown 文件到 ${result.target_dir}（保留个人笔记与复习注释）。`,
+          'success',
+        )
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : '通过 Local REST API 同步 Obsidian 失败', 'error')
+      } finally {
+        setSyncingObsidian(false)
+      }
+      return
+    }
+
     if (!backendOnline) {
       onNotify(
-        '直写本地 Obsidian Vault 文件夹需要 Python 后端运行（请确认已启动 start.sh）；离线时请点击右侧导出 Markdown。',
+        '直写本地 Obsidian Vault 文件夹需要 Python 后端运行（请确认已启动 start.sh）；也可以在设置中切换「Local REST API 插件」实现纯前端同步。',
         'error',
       )
       return
@@ -122,8 +179,15 @@ export function StatsAndExport({
       const result = await syncObsidianVault({
         cards: syncState.cards,
         vaultPath: settings.obsidianVaultPath.trim(),
-        subfolder: settings.obsidianSubfolder.trim() || 'X-Vocab',
+        subfolder,
         includeFlashcards,
+        srDeckTag,
+        srCardStyle,
+        srSubdeckByCategory,
+        srSeedProgress,
+        srIncludeAudio,
+        srAudioAutoplay,
+        ttsAccent,
       })
       onNotify(
         `已写入 ${result.written_count} 个 Obsidian Markdown 文件到 ${result.target_dir}（保留个人笔记与复习注释）。`,
@@ -136,18 +200,142 @@ export function StatsAndExport({
     }
   }
 
+  const handlePullObsidianSr = async () => {
+    if (syncState.cards.length === 0) {
+      onNotify('当前词库为空，无法拉取 Obsidian Spaced Repetition 进度。', 'error')
+      return
+    }
+    const subfolder = settings.obsidianSubfolder.trim() || 'X-Vocab'
+
+    if (settings.obsidianSyncMode === 'rest_api') {
+      const apiUrl = settings.obsidianRestUrl.trim()
+      const apiKey = settings.obsidianRestApiKey.trim()
+      if (!apiUrl || !apiKey) {
+        onOpenSettings()
+        onNotify('请先在设置中填写 Obsidian Local REST API 地址与 API Key。', 'info')
+        return
+      }
+      setPullingObsidianSr(true)
+      try {
+        const res = await pullObsidianSrProgress({
+          mode: 'rest_api',
+          cards: syncState.cards,
+          apiUrl,
+          apiKey,
+          subfolder,
+          backendOnline,
+        })
+        if (res.updated_count > 0) {
+          onMergePulledCards?.(res.updated_cards)
+          const preview = res.updated_words.slice(0, 5).join('、')
+          const more = res.updated_count > 5 ? ` 等 ${res.updated_count} 张词卡` : ''
+          onNotify(
+            `已从 Obsidian Spaced Repetition 同步 ${res.updated_count} 张词卡的复习进度（${preview}${more}）。`,
+            'success',
+          )
+        } else {
+          onNotify(
+            `已扫描 ${res.scanned_notes} 篇笔记（其中 ${res.notes_with_sr} 篇含 <!--SR:...--> 注释），网页端进度已是最新。`,
+            'info',
+          )
+        }
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : '拉取 Obsidian SR 进度失败', 'error')
+      } finally {
+        setPullingObsidianSr(false)
+      }
+      return
+    }
+
+    if (!backendOnline) {
+      onNotify('从本机 Vault 文件夹读取 SR 进度需要 Python 后端运行（或切换 Local REST API 模式）。', 'error')
+      return
+    }
+    if (!settings.obsidianVaultPath.trim()) {
+      onOpenSettings()
+      onNotify('请先在设置中填写您的本机 Obsidian Vault 文件夹路径。', 'info')
+      return
+    }
+    setPullingObsidianSr(true)
+    try {
+      const res = await pullObsidianSrProgress({
+        mode: 'local_path',
+        cards: syncState.cards,
+        vaultPath: settings.obsidianVaultPath.trim(),
+        subfolder,
+        backendOnline,
+      })
+      if (res.updated_count > 0) {
+        onMergePulledCards?.(res.updated_cards)
+        const preview = res.updated_words.slice(0, 5).join('、')
+        const more = res.updated_count > 5 ? ` 等 ${res.updated_count} 张词卡` : ''
+        onNotify(
+          `已从本地 Obsidian 笔记导入 ${res.updated_count} 张词卡的 Spaced Repetition 进度（${preview}${more}）。`,
+          'success',
+        )
+      } else {
+        onNotify(
+          `已扫描 ${res.scanned_notes} 篇笔记（其中 ${res.notes_with_sr} 篇含 SR 注释），当前 FSRS 进度已是最新。`,
+          'info',
+        )
+      }
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '读取本地 Obsidian SR 进度失败', 'error')
+    } finally {
+      setPullingObsidianSr(false)
+    }
+  }
+
+  const handleLaunchObsidianSr = async () => {
+    const apiUrl = settings.obsidianRestUrl.trim()
+    const apiKey = settings.obsidianRestApiKey.trim()
+    if (!apiUrl || !apiKey) {
+      onOpenSettings()
+      onNotify('请先在设置中填写 Obsidian Local REST API 地址与 API Key。', 'info')
+      return
+    }
+    setLaunchingObsidianSr(true)
+    try {
+      const res = await launchObsidianSpacedRepetition({
+        apiUrl,
+        apiKey,
+        backendOnline,
+      })
+      onNotify(res.message, 'success')
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '唤醒 Obsidian Spaced Repetition 失败', 'error')
+    } finally {
+      setLaunchingObsidianSr(false)
+    }
+  }
+
   const handleExportObsidianZip = async () => {
     if (syncState.cards.length === 0) {
       onNotify('当前词库为空，请先加载示例词卡或采集生成后再导出。', 'error')
       return
     }
     setExportingObsidianZip(true)
+    const srDeckTag = normalizeSrDeckTag(settings.obsidianSrDeckTag)
+    const srCardStyle = settings.obsidianSrCardStyle || 'multiline'
+    const srSubdeckByCategory = settings.obsidianSrSubdeckByCategory ?? false
+    const srSeedProgress = settings.obsidianSrSyncProgress ?? true
+    const srIncludeAudio = settings.obsidianSrAudio ?? true
+    const srAudioAutoplay = settings.obsidianSrAudioAutoplay ?? true
+    const ttsAccent = settings.ttsAccent || 'en-US'
+
     try {
       if (backendOnline) {
         const blob = await exportObsidianZip({
           cards: syncState.cards,
           subfolder: settings.obsidianSubfolder.trim() || 'X-Vocab',
           includeFlashcards,
+          srDeckTag,
+          srCardStyle,
+          srSubdeckByCategory,
+          srSeedProgress,
+          srIncludeAudio,
+          srAudioAutoplay,
+          ttsAccent,
         })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -162,7 +350,14 @@ export function StatsAndExport({
           'success',
         )
       } else {
-        const markdown = buildOfflineObsidianMarkdown(syncState.cards, includeFlashcards)
+        const markdown = buildOfflineObsidianMarkdown(syncState.cards, includeFlashcards, {
+          srDeckTag,
+          srCardStyle,
+          srSubdeckByCategory,
+          srIncludeAudio,
+          srAudioAutoplay,
+          ttsAccent,
+        })
         const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -359,15 +554,32 @@ export function StatsAndExport({
         </div>
 
         <p style={{ fontSize: 13.5, color: 'var(--ink-secondary)', margin: '0 0 12px' }}>
-          本地仓库目标：
-          {settings.obsidianVaultPath.trim() ? (
-            <strong>
-              <code>
-                {settings.obsidianVaultPath.trim()}/{settings.obsidianSubfolder.trim() || 'X-Vocab'}
-              </code>
-            </strong>
+          {settings.obsidianSyncMode === 'rest_api' ? (
+            <>
+              REST API 目标：
+              {settings.obsidianRestUrl.trim() && settings.obsidianRestApiKey.trim() ? (
+                <strong>
+                  <code>
+                    {settings.obsidianRestUrl.trim()} / {settings.obsidianSubfolder.trim() || 'X-Vocab'}
+                  </code>
+                </strong>
+              ) : (
+                <span>未完整填写 Obsidian Local REST API 地址与 API Key（可点击下方按钮前往设置）</span>
+              )}
+            </>
           ) : (
-            <span>未配置本机 Obsidian Vault 路径（可先点击设置填入路径，或直接导出 ZIP 解压入库）</span>
+            <>
+              本地仓库目标：
+              {settings.obsidianVaultPath.trim() ? (
+                <strong>
+                  <code>
+                    {settings.obsidianVaultPath.trim()}/{settings.obsidianSubfolder.trim() || 'X-Vocab'}
+                  </code>
+                </strong>
+              ) : (
+                <span>未配置本机 Obsidian Vault 路径（可先点击设置填入路径，或直接导出 ZIP 解压入库）</span>
+              )}
+            </>
           )}
         </p>
 
@@ -389,7 +601,23 @@ export function StatsAndExport({
             onChange={() => setFlashcardOverride(!includeFlashcards)}
           />
           <span>
-            附带 Obsidian <strong>Spaced Repetition</strong> 插件多行闪卡格式（<code>#flashcards/x-vocab</code> + <code>?</code>）
+            附带 Obsidian <strong>Spaced Repetition</strong> 插件闪卡格式（
+            <code>{normalizeSrDeckTag(settings.obsidianSrDeckTag)}</code>
+            {' · '}
+            <code>
+              {settings.obsidianSrCardStyle === 'bidirectional'
+                ? '?? 双向'
+                : settings.obsidianSrCardStyle === 'inline'
+                  ? ':: 单行'
+                  : '? 多行'}
+            </code>
+            {(settings.obsidianSrAudio ?? true) && (
+              <>
+                {' · '}
+                <code>+ 语音</code>
+              </>
+            )}
+            ）
           </span>
         </label>
 
@@ -402,8 +630,40 @@ export function StatsAndExport({
             onClick={handleSyncObsidian}
           >
             <FileText size={15} />
-            {syncingObsidian ? '正在写入 Vault...' : '一键写入 Obsidian Vault'}
+            {settings.obsidianSyncMode === 'rest_api'
+              ? syncingObsidian
+                ? '正在通过 REST API 同步...'
+                : '一键通过 REST API 同步 Obsidian'
+              : syncingObsidian
+                ? '正在写入 Vault...'
+                : '一键写入 Obsidian Vault'}
           </button>
+
+          <button
+            id="btn-pull-obsidian-sr"
+            type="button"
+            className="btn"
+            disabled={pullingObsidianSr || syncState.cards.length === 0}
+            onClick={handlePullObsidianSr}
+            title="扫描 Obsidian 笔记里的 <!--SR:...--> 调度注释，把在 Obsidian 刷过的卡进度回写到本应用 FSRS 队列"
+          >
+            <RefreshCw size={15} />
+            {pullingObsidianSr ? '正在拉取 SR 进度...' : '从 Obsidian 同步 SR 进度'}
+          </button>
+
+          {settings.obsidianSyncMode === 'rest_api' && (
+            <button
+              id="btn-launch-obsidian-sr"
+              type="button"
+              className="btn"
+              disabled={launchingObsidianSr}
+              onClick={handleLaunchObsidianSr}
+              title="通过 Local REST API 命令直接打开 Obsidian 的 Spaced Repetition 复习界面"
+            >
+              <BookOpenCheck size={15} />
+              {launchingObsidianSr ? '正在唤醒 Obsidian...' : '在 Obsidian 开始 SR 刷卡'}
+            </button>
+          )}
 
           <button
             id="btn-export-obsidian-zip"

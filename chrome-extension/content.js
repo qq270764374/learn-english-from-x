@@ -1,12 +1,33 @@
 (() => {
   const MAX_SESSION_SCROLL_LIMIT = 150;
+  const MAX_STALLED_ROUNDS = 5;
+  const MAX_LOADING_WAIT_ROUNDS = 8;
+  const MAX_ALREADY_SEEN_ROUNDS = 30;
+
   let captureEnabled = false;
   let autoScrollTimer = null;
+  let nudgeTimer = null;
+  let scanDebounceTimer = null;
+  let scrollScanTimer = null;
+
   let autoScrollActive = false;
   let autoScrollTarget = 30;
   let autoScrollCaptured = 0;
-  let idleRounds = 0;
+  let autoScrollPhase = "idle"; // "idle" | "scrolling" | "waiting_load" | "stopped"
+  let autoScrollStopReason = ""; // "" | "target_reached" | "stalled" | "already_seen_limit" | "manual"
+
+  let stalledRounds = 0;
+  let alreadySeenRounds = 0;
+  let roundIndex = 0;
+  let newAddedSinceTick = false;
+  let pendingSaveCount = 0;
+  let prevScrollY = 0;
+  let prevScrollHeight = 0;
+  let prevVisibleSignature = "";
+  let lastKnownTotal = 0;
+
   let observer = null;
+  let scrollListenerAttached = false;
   let badgePill = null;
 
   const seenSessionIds = new Set();
@@ -40,7 +61,9 @@
     const langAttr = textEl.getAttribute("lang");
     if (!isMostlyEnglish(text, langAttr)) return null;
 
-    const linkEl = article.querySelector('a[href*="/status/"]');
+    const timeEl = article.querySelector("time[datetime]");
+    const timeLink = timeEl ? timeEl.closest('a[href*="/status/"]') : null;
+    const linkEl = timeLink || article.querySelector('a[href*="/status/"]');
     if (!linkEl) return null;
     const href = linkEl.getAttribute("href") || "";
     const match = href.match(/\/([^/]+)\/status\/(\d+)/);
@@ -59,7 +82,6 @@
       }
     }
 
-    const timeEl = article.querySelector("time[datetime]");
     const createdAt = timeEl ? timeEl.getAttribute("datetime") || "" : "";
 
     return {
@@ -75,6 +97,7 @@
 
   function ensurePill() {
     if (badgePill) return badgePill;
+    if (!document.body) return null;
     const pill = document.createElement("div");
     pill.id = "lex-capture-pill";
     Object.assign(pill.style, {
@@ -102,16 +125,57 @@
 
   function updatePill(totalSaved) {
     const pill = ensurePill();
+    if (!pill) return;
     if (!captureEnabled && !autoScrollActive) {
       pill.style.display = "none";
       return;
     }
     pill.style.display = "flex";
     if (autoScrollActive) {
-      pill.textContent = `自动滚动采集中 (${autoScrollCaptured}/${autoScrollTarget}) · 已存 ${totalSaved} 条`;
+      if (autoScrollPhase === "waiting_load") {
+        pill.textContent = `等待页面加载更多 (${autoScrollCaptured}/${autoScrollTarget}) · 已存 ${totalSaved} 条`;
+      } else {
+        pill.textContent = `自动滚动采集中 (${autoScrollCaptured}/${autoScrollTarget}) · 已存 ${totalSaved} 条`;
+      }
     } else {
       pill.textContent = `英文采集开启 · 已存 ${totalSaved} 条`;
     }
+  }
+
+  function getScrollMetrics() {
+    const doc = document.scrollingElement || document.documentElement;
+    const scrollY = window.scrollY ?? (doc ? doc.scrollTop : 0) ?? 0;
+    const scrollHeight = doc ? doc.scrollHeight : 0;
+    const viewportHeight = window.innerHeight || (doc ? doc.clientHeight : 0) || 0;
+    const atBottom = viewportHeight + scrollY >= scrollHeight - 60;
+    return { scrollY, scrollHeight, viewportHeight, atBottom };
+  }
+
+  function getVisibleTweetSnapshot() {
+    const articles = document.querySelectorAll('article[data-testid="tweet"]');
+    const ids = [];
+    articles.forEach((article) => {
+      const link = article.querySelector('a[href*="/status/"]');
+      const href = link ? link.getAttribute("href") || "" : "";
+      const match = href.match(/\/status\/(\d+)/);
+      if (match) ids.push(match[1]);
+    });
+    return {
+      count: articles.length,
+      signature: ids.join(","),
+    };
+  }
+
+  function isXLoadingMore() {
+    const primary = document.querySelector('[data-testid="primaryColumn"]');
+    if (!primary) return false;
+    const spinners = primary.querySelectorAll('[role="progressbar"]');
+    for (const el of spinners) {
+      if (!el.closest('article[data-testid="tweet"]')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function scanVisibleTweets() {
@@ -127,82 +191,235 @@
     });
 
     if (batch.length > 0) {
+      pendingSaveCount += 1;
       chrome.runtime.sendMessage({ type: "SAVE_TWEETS", tweets: batch }, (res) => {
+        pendingSaveCount = Math.max(0, pendingSaveCount - 1);
         if (chrome.runtime.lastError) return;
-        const total = res && typeof res.total === "number" ? res.total : seenSessionIds.size;
-        if (autoScrollActive && res && typeof res.added === "number") {
-          autoScrollCaptured += res.added;
+        if (res && typeof res.total === "number") {
+          lastKnownTotal = res.total;
         }
-        updatePill(total);
+        if (autoScrollActive && res && typeof res.added === "number" && res.added > 0) {
+          autoScrollCaptured += res.added;
+          newAddedSinceTick = true;
+          stalledRounds = 0;
+          alreadySeenRounds = 0;
+          if (autoScrollCaptured >= autoScrollTarget) {
+            stopAutoScroll("target_reached");
+            return;
+          }
+        }
+        updatePill(lastKnownTotal);
       });
     }
     return batch.length;
   }
 
-  function startObserver() {
-    if (observer) return;
-    observer = new MutationObserver(() => {
+  function scheduleScan(delay = 220) {
+    if (!captureEnabled && !autoScrollActive) return;
+    if (scanDebounceTimer) return;
+    scanDebounceTimer = setTimeout(() => {
+      scanDebounceTimer = null;
       scanVisibleTweets();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    }, delay);
+  }
+
+  function startObserver() {
+    if (!observer && document.body) {
+      observer = new MutationObserver(() => {
+        scheduleScan(220);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+    if (!scrollListenerAttached) {
+      scrollListenerAttached = true;
+      window.addEventListener(
+        "scroll",
+        () => {
+          if (!captureEnabled && !autoScrollActive) return;
+          if (scrollScanTimer) clearTimeout(scrollScanTimer);
+          scrollScanTimer = setTimeout(() => {
+            scrollScanTimer = null;
+            scanVisibleTweets();
+          }, 260);
+        },
+        { passive: true }
+      );
+    }
     scanVisibleTweets();
   }
 
-  function stopAutoScroll() {
+  function stopAutoScroll(reason = "manual") {
     autoScrollActive = false;
+    autoScrollPhase = "stopped";
+    autoScrollStopReason = reason;
     if (autoScrollTimer) {
       clearTimeout(autoScrollTimer);
       autoScrollTimer = null;
     }
+    if (nudgeTimer) {
+      clearTimeout(nudgeTimer);
+      nudgeTimer = null;
+    }
+    updatePill(lastKnownTotal);
     chrome.runtime.sendMessage({ type: "GET_STATUS" }, (res) => {
-      updatePill((res && res.total) || 0);
+      if (chrome.runtime.lastError) return;
+      if (res && typeof res.total === "number") {
+        lastKnownTotal = res.total;
+        updatePill(lastKnownTotal);
+      }
     });
+  }
+
+  function nudgeBottomForLoad() {
+    if (!autoScrollActive) return;
+    window.scrollBy({ top: -180, behavior: "auto" });
+    if (nudgeTimer) clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      if (!autoScrollActive) return;
+      const { scrollHeight } = getScrollMetrics();
+      window.scrollTo({ top: scrollHeight, behavior: "smooth" });
+    }, 180);
   }
 
   function scheduleNextScroll() {
     if (!autoScrollActive) return;
     if (autoScrollCaptured >= autoScrollTarget) {
-      stopAutoScroll();
+      stopAutoScroll("target_reached");
       return;
-    }
-    const newlyFound = scanVisibleTweets();
-    if (newlyFound === 0) {
-      idleRounds += 1;
-    } else {
-      idleRounds = 0;
     }
 
-    if (idleRounds >= 5) {
-      stopAutoScroll();
-      return;
+    const newlyFoundSync = scanVisibleTweets();
+    const { scrollY, scrollHeight, atBottom } = getScrollMetrics();
+    const snapshot = getVisibleTweetSnapshot();
+    const isLoading = isXLoadingMore();
+
+    if (roundIndex === 0) {
+      prevScrollY = scrollY;
+      prevScrollHeight = scrollHeight;
+      prevVisibleSignature = snapshot.signature;
+      newAddedSinceTick = false;
+      autoScrollPhase = "scrolling";
+      updatePill(lastKnownTotal);
+    } else {
+      const hadCaptureProgress = newAddedSinceTick || newlyFoundSync > 0 || pendingSaveCount > 0;
+      const scrollMoved = scrollY > prevScrollY + 20;
+      const heightGrew = scrollHeight > prevScrollHeight + 20;
+      const visibleChanged = snapshot.signature !== prevVisibleSignature && snapshot.signature !== "";
+
+      if (hadCaptureProgress) {
+        stalledRounds = 0;
+        alreadySeenRounds = 0;
+        autoScrollPhase = "scrolling";
+      } else if (scrollMoved || heightGrew || visibleChanged) {
+        stalledRounds = 0;
+        alreadySeenRounds += 1;
+        autoScrollPhase = "scrolling";
+        if (alreadySeenRounds >= MAX_ALREADY_SEEN_ROUNDS) {
+          stopAutoScroll("already_seen_limit");
+          return;
+        }
+      } else {
+        stalledRounds += 1;
+        autoScrollPhase = "waiting_load";
+
+        if (atBottom && (stalledRounds === 1 || stalledRounds === 3)) {
+          nudgeBottomForLoad();
+        }
+
+        const maxStall = isLoading ? MAX_LOADING_WAIT_ROUNDS : MAX_STALLED_ROUNDS;
+        if (stalledRounds >= maxStall) {
+          stopAutoScroll("stalled");
+          return;
+        }
+      }
+
+      prevScrollY = scrollY;
+      prevScrollHeight = scrollHeight;
+      if (snapshot.signature) {
+        prevVisibleSignature = snapshot.signature;
+      }
+      newAddedSinceTick = false;
+      updatePill(lastKnownTotal);
     }
+
+    roundIndex += 1;
 
     // Gentle randomized scroll distance and human-like pause (1.8s - 3.4s)
-    const distance = 580 + Math.floor(Math.random() * 340);
-    window.scrollBy({ top: distance, behavior: "smooth" });
+    if (autoScrollPhase !== "waiting_load") {
+      const distance = 580 + Math.floor(Math.random() * 340);
+      window.scrollBy({ top: distance, behavior: "smooth" });
+    } else if (!atBottom) {
+      window.scrollBy({ top: 320, behavior: "smooth" });
+    }
+
     const delayMs = 1800 + Math.floor(Math.random() * 1600);
     autoScrollTimer = setTimeout(scheduleNextScroll, delayMs);
   }
 
   function startAutoScroll(targetCount) {
+    if (autoScrollTimer) {
+      clearTimeout(autoScrollTimer);
+      autoScrollTimer = null;
+    }
+    if (nudgeTimer) {
+      clearTimeout(nudgeTimer);
+      nudgeTimer = null;
+    }
     captureEnabled = true;
     chrome.storage.local.set({ captureEnabled: true });
-    startObserver();
+
     autoScrollTarget = Math.min(Math.max(Number(targetCount) || 30, 5), MAX_SESSION_SCROLL_LIMIT);
     autoScrollCaptured = 0;
-    idleRounds = 0;
+    autoScrollPhase = "scrolling";
+    autoScrollStopReason = "";
+    stalledRounds = 0;
+    alreadySeenRounds = 0;
+    roundIndex = 0;
+    newAddedSinceTick = false;
+    pendingSaveCount = 0;
     autoScrollActive = true;
+
+    startObserver();
+    updatePill(lastKnownTotal);
     scheduleNextScroll();
   }
 
   chrome.storage.local.get(["captureEnabled", "tweets"], (data) => {
     captureEnabled = Boolean(data.captureEnabled);
-    if (Array.isArray(data.tweets)) {
-      data.tweets.forEach((t) => seenSessionIds.add(t.id));
-    }
+    const tweets = Array.isArray(data.tweets) ? data.tweets : [];
+    lastKnownTotal = tweets.length;
+    tweets.forEach((t) => {
+      if (t && t.id) seenSessionIds.add(t.id);
+    });
     if (captureEnabled) {
       startObserver();
-      updatePill((data.tweets || []).length);
+      updatePill(lastKnownTotal);
+    }
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.tweets) {
+      const nextTweets = Array.isArray(changes.tweets.newValue) ? changes.tweets.newValue : [];
+      if (nextTweets.length === 0) {
+        seenSessionIds.clear();
+      } else {
+        nextTweets.forEach((t) => {
+          if (t && t.id) seenSessionIds.add(t.id);
+        });
+      }
+      lastKnownTotal = nextTweets.length;
+      updatePill(lastKnownTotal);
+    }
+    if (changes.captureEnabled) {
+      captureEnabled = Boolean(changes.captureEnabled.newValue);
+      if (captureEnabled) {
+        startObserver();
+      } else if (autoScrollActive) {
+        stopAutoScroll("manual");
+      }
+      updatePill(lastKnownTotal);
     }
   });
 
@@ -212,10 +429,13 @@
       if (captureEnabled) {
         startObserver();
       } else {
-        stopAutoScroll();
+        stopAutoScroll("manual");
       }
       chrome.runtime.sendMessage({ type: "GET_STATUS" }, (res) => {
-        updatePill((res && res.total) || 0);
+        if (!chrome.runtime.lastError && res && typeof res.total === "number") {
+          lastKnownTotal = res.total;
+        }
+        updatePill(lastKnownTotal);
       });
       sendResponse({ ok: true, captureEnabled });
       return true;
@@ -228,7 +448,7 @@
     }
 
     if (msg.type === "STOP_AUTO_SCROLL") {
-      stopAutoScroll();
+      stopAutoScroll("manual");
       sendResponse({ ok: true });
       return true;
     }
@@ -239,6 +459,8 @@
         autoScrollActive,
         autoScrollCaptured,
         autoScrollTarget,
+        autoScrollPhase,
+        autoScrollStopReason,
       });
       return true;
     }

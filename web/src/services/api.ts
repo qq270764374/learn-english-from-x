@@ -4,6 +4,11 @@ import type {
   EnrichResponse,
   ExtractResponse,
   FilterTier,
+  LLMProvider,
+  LLMTestResponse,
+  ObsidianSrCardStyle,
+  ObsidianSrLaunchResult,
+  ObsidianSrPullResult,
   StarterCreator,
   SyncStateDocument,
   TweetItem,
@@ -23,13 +28,20 @@ async function parseErrorMessage(resp: Response): Promise<string> {
 
 export async function checkBackendHealth(): Promise<{
   online: boolean
-  default_provider?: string
+  default_provider?: LLMProvider
+  default_base_url?: string
   default_model?: string
+  default_filter_tier?: FilterTier
 }> {
   try {
     const resp = await fetch('/api/health')
     if (!resp.ok) return { online: false }
-    const data = (await resp.json()) as { default_provider?: string; default_model?: string }
+    const data = (await resp.json()) as {
+      default_provider?: LLMProvider
+      default_base_url?: string
+      default_model?: string
+      default_filter_tier?: FilterTier
+    }
     return { online: true, ...data }
   } catch {
     return { online: false }
@@ -106,27 +118,48 @@ export async function extractCandidates(params: {
   return (await resp.json()) as ExtractResponse
 }
 
-export async function enrichCandidates(params: {
-  candidates: CandidateWord[]
-  settings: UserSettings
-  autoSave?: boolean
-}): Promise<EnrichResponse> {
-  const { settings } = params
+function buildLlmOverrideConfig(settings: UserSettings) {
   const isGemini = settings.llmProvider === 'gemini'
-
-  const llmConfig = {
+  return {
     provider: settings.llmProvider,
     api_key: (isGemini ? settings.geminiApiKey : settings.llmApiKey).trim() || null,
     base_url: isGemini ? null : settings.llmBaseUrl.trim() || null,
     model: (isGemini ? settings.geminiModel : settings.llmModel).trim() || null,
   }
+}
 
+export async function testLlmConnection(settings: UserSettings): Promise<LLMTestResponse> {
+  let resp: Response
+  try {
+    resp = await fetch('/api/llm/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llm_config: buildLlmOverrideConfig(settings) }),
+    })
+  } catch {
+    throw new Error('无法连接本地 Python 后端（http://127.0.0.1:8765），请先运行 start.sh 启动服务后再测试连通性。')
+  }
+
+  if (!resp.ok) {
+    if (resp.status === 502 || resp.status === 503 || resp.status === 504) {
+      throw new Error('无法连接本地 Python 后端（http://127.0.0.1:8765），请确认已运行 start.sh。')
+    }
+    throw new Error(await parseErrorMessage(resp))
+  }
+  return (await resp.json()) as LLMTestResponse
+}
+
+export async function enrichCandidates(params: {
+  candidates: CandidateWord[]
+  settings: UserSettings
+  autoSave?: boolean
+}): Promise<EnrichResponse> {
   const resp = await fetch('/api/enrich', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       candidates: params.candidates,
-      llm_config: llmConfig,
+      llm_config: buildLlmOverrideConfig(params.settings),
       auto_save: params.autoSave ?? true,
     }),
   })
@@ -162,6 +195,13 @@ export async function exportObsidianZip(params: {
   cards: VocabCard[]
   subfolder: string
   includeFlashcards: boolean
+  srDeckTag?: string
+  srCardStyle?: ObsidianSrCardStyle
+  srSubdeckByCategory?: boolean
+  srSeedProgress?: boolean
+  srIncludeAudio?: boolean
+  srAudioAutoplay?: boolean
+  ttsAccent?: 'en-US' | 'en-GB'
 }): Promise<Blob> {
   const resp = await fetch('/api/export/obsidian-zip', {
     method: 'POST',
@@ -170,6 +210,13 @@ export async function exportObsidianZip(params: {
       cards: params.cards,
       subfolder: params.subfolder || 'X-Vocab',
       include_flashcards: params.includeFlashcards,
+      sr_deck_tag: params.srDeckTag || '#flashcards/x-vocab',
+      sr_card_style: params.srCardStyle || 'multiline',
+      sr_subdeck_by_category: params.srSubdeckByCategory ?? false,
+      sr_seed_progress: params.srSeedProgress ?? false,
+      sr_include_audio: params.srIncludeAudio ?? false,
+      sr_audio_autoplay: params.srAudioAutoplay ?? false,
+      tts_accent: params.ttsAccent || 'en-US',
     }),
   })
   if (!resp.ok) throw new Error(await parseErrorMessage(resp))
@@ -187,6 +234,13 @@ export async function syncObsidianVault(params: {
   vaultPath: string
   subfolder: string
   includeFlashcards: boolean
+  srDeckTag?: string
+  srCardStyle?: ObsidianSrCardStyle
+  srSubdeckByCategory?: boolean
+  srSeedProgress?: boolean
+  srIncludeAudio?: boolean
+  srAudioAutoplay?: boolean
+  ttsAccent?: 'en-US' | 'en-GB'
 }): Promise<ObsidianSyncResult> {
   const resp = await fetch('/api/export/obsidian-sync', {
     method: 'POST',
@@ -196,9 +250,123 @@ export async function syncObsidianVault(params: {
       vault_path: params.vaultPath,
       subfolder: params.subfolder || 'X-Vocab',
       include_flashcards: params.includeFlashcards,
+      sr_deck_tag: params.srDeckTag || '#flashcards/x-vocab',
+      sr_card_style: params.srCardStyle || 'multiline',
+      sr_subdeck_by_category: params.srSubdeckByCategory ?? false,
+      sr_seed_progress: params.srSeedProgress ?? false,
+      sr_include_audio: params.srIncludeAudio ?? false,
+      sr_audio_autoplay: params.srAudioAutoplay ?? false,
+      tts_accent: params.ttsAccent || 'en-US',
     }),
   })
   if (!resp.ok) throw new Error(await parseErrorMessage(resp))
   return (await resp.json()) as ObsidianSyncResult
+}
+
+export interface ObsidianRestBackendTestResult {
+  ok: boolean
+  url: string
+  status_code?: number | null
+  authenticated: boolean
+  latency_ms: number
+  plugin_version: string
+  obsidian_version: string
+  message: string
+}
+
+export async function testObsidianRestViaBackend(params: {
+  apiUrl: string
+  apiKey: string
+}): Promise<ObsidianRestBackendTestResult> {
+  const resp = await fetch('/api/export/obsidian-rest-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_url: params.apiUrl.trim(),
+      api_key: params.apiKey.trim(),
+    }),
+  })
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp))
+  return (await resp.json()) as ObsidianRestBackendTestResult
+}
+
+export async function syncObsidianRestViaBackend(params: {
+  cards: VocabCard[]
+  apiUrl: string
+  apiKey: string
+  subfolder: string
+  includeFlashcards: boolean
+  srDeckTag?: string
+  srCardStyle?: ObsidianSrCardStyle
+  srSubdeckByCategory?: boolean
+  srSeedProgress?: boolean
+  srIncludeAudio?: boolean
+  srAudioAutoplay?: boolean
+  ttsAccent?: 'en-US' | 'en-GB'
+}): Promise<ObsidianSyncResult> {
+  const resp = await fetch('/api/export/obsidian-rest-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cards: params.cards,
+      api_url: params.apiUrl.trim(),
+      api_key: params.apiKey.trim(),
+      subfolder: params.subfolder || 'X-Vocab',
+      include_flashcards: params.includeFlashcards,
+      sr_deck_tag: params.srDeckTag || '#flashcards/x-vocab',
+      sr_card_style: params.srCardStyle || 'multiline',
+      sr_subdeck_by_category: params.srSubdeckByCategory ?? false,
+      sr_seed_progress: params.srSeedProgress ?? false,
+      sr_include_audio: params.srIncludeAudio ?? false,
+      sr_audio_autoplay: params.srAudioAutoplay ?? false,
+      tts_accent: params.ttsAccent || 'en-US',
+    }),
+  })
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp))
+  return (await resp.json()) as ObsidianSyncResult
+}
+
+export async function pullObsidianSrViaBackend(params: {
+  mode: 'local_path' | 'rest_api'
+  cards: VocabCard[]
+  vaultPath?: string
+  apiUrl?: string
+  apiKey?: string
+  subfolder: string
+  applyToStore?: boolean
+}): Promise<ObsidianSrPullResult> {
+  const resp = await fetch('/api/export/obsidian-sr-pull', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: params.mode,
+      cards: params.cards,
+      vault_path: params.vaultPath?.trim() || null,
+      api_url: params.apiUrl?.trim() || null,
+      api_key: params.apiKey?.trim() || null,
+      subfolder: params.subfolder || 'X-Vocab',
+      apply_to_store: params.applyToStore ?? true,
+    }),
+  })
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp))
+  return (await resp.json()) as ObsidianSrPullResult
+}
+
+export async function launchObsidianSrViaBackend(params: {
+  apiUrl: string
+  apiKey: string
+  commandId?: string
+}): Promise<ObsidianSrLaunchResult> {
+  const resp = await fetch('/api/export/obsidian-sr-launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_url: params.apiUrl.trim(),
+      api_key: params.apiKey.trim(),
+      command_id: params.commandId?.trim() || null,
+    }),
+  })
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp))
+  return (await resp.json()) as ObsidianSrLaunchResult
 }
 

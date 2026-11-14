@@ -4,6 +4,7 @@ import {
   FileUp,
   Filter,
   RefreshCw,
+  Settings,
   Sparkles,
   Trash2,
 } from 'lucide-react'
@@ -396,11 +397,22 @@ export function IngestConsole({
               本地零成本剔除已认识的基础词与无用噪声，仅将高价值候选词交给 {settings.llmProvider === 'gemini' ? 'Gemini' : 'DeepSeek'} 解析。
             </p>
           </div>
-          {syncState.cards.length > 0 && (
-            <button id="btn-jump-study" type="button" className="btn btn-sm" onClick={onGoToStudy}>
-              前往「今日复习」({syncState.cards.length} 张)
+          <div className="toolbar-row">
+            <button
+              id="btn-open-llm-settings"
+              type="button"
+              className="btn btn-sm"
+              onClick={onOpenSettings}
+            >
+              <Settings size={14} />
+              模型配置与连通测试 ({settings.llmProvider === 'gemini' ? settings.geminiModel : settings.llmModel})
             </button>
-          )}
+            {syncState.cards.length > 0 && (
+              <button id="btn-jump-study" type="button" className="btn btn-sm" onClick={onGoToStudy}>
+                前往「今日复习」({syncState.cards.length} 张)
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="filter-controls">

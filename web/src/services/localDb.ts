@@ -94,10 +94,15 @@ export async function saveLocalSyncState(state: SyncStateDocument): Promise<void
   await idbSet(KEYS.SYNC_STATE, state)
 }
 
-export async function loadSettings(): Promise<UserSettings> {
+export async function loadSettingsWithMeta(): Promise<{ settings: UserSettings; isCustom: boolean }> {
   const stored = await idbGet<Partial<UserSettings>>(KEYS.SETTINGS)
-  if (!stored) return { ...DEFAULT_SETTINGS }
-  return { ...DEFAULT_SETTINGS, ...stored }
+  if (!stored) return { settings: { ...DEFAULT_SETTINGS }, isCustom: false }
+  return { settings: { ...DEFAULT_SETTINGS, ...stored }, isCustom: true }
+}
+
+export async function loadSettings(): Promise<UserSettings> {
+  const { settings } = await loadSettingsWithMeta()
+  return settings
 }
 
 export async function saveSettings(settings: UserSettings): Promise<void> {

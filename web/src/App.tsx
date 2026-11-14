@@ -12,11 +12,12 @@ import {
   syncObsidianVault,
   syncWithBackendStore,
 } from './services/api'
+import { syncObsidianRest } from './services/obsidianRest'
 import { mergeSyncStates, normalizeWordKey, syncWithGoogleDrive } from './services/googleDrive'
 import {
   loadCachedTweets,
   loadLocalSyncState,
-  loadSettings,
+  loadSettingsWithMeta,
   saveCachedTweets,
   saveLocalSyncState,
   saveSettings,
@@ -82,16 +83,34 @@ export default function App() {
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      const [localState, localSettings, localTweets, health, creatorList] = await Promise.all([
+      const [localState, { settings: localSettings, isCustom }, localTweets, health, creatorList] = await Promise.all([
         loadLocalSyncState(),
-        loadSettings(),
+        loadSettingsWithMeta(),
         loadCachedTweets(),
         checkBackendHealth(),
         fetchStarterCreators(),
       ])
 
       if (!active) return
-      setSettings(localSettings)
+      const effectiveSettings: UserSettings =
+        !isCustom && health.online
+          ? {
+              ...localSettings,
+              llmProvider: health.default_provider === 'gemini' ? 'gemini' : 'openai_compatible',
+              llmBaseUrl: health.default_base_url || localSettings.llmBaseUrl,
+              llmModel:
+                health.default_provider === 'gemini'
+                  ? localSettings.llmModel
+                  : health.default_model || localSettings.llmModel,
+              geminiModel:
+                health.default_provider === 'gemini'
+                  ? health.default_model || localSettings.geminiModel
+                  : localSettings.geminiModel,
+              filterTier: health.default_filter_tier || localSettings.filterTier,
+            }
+          : localSettings
+
+      setSettings(effectiveSettings)
       setTweets(localTweets)
       setBackendOnline(health.online)
       setCreators(creatorList)
@@ -253,28 +272,74 @@ export default function App() {
         backendOnline,
       )
 
-      if (
-        settings.obsidianAutoSync &&
-        settings.obsidianVaultPath.trim() &&
-        backendOnline &&
-        cardsForObsidian.length > 0 &&
-        newCards.length > 0
-      ) {
-        void syncObsidianVault({
-          cards: cardsForObsidian,
-          vaultPath: settings.obsidianVaultPath.trim(),
-          subfolder: settings.obsidianSubfolder.trim() || 'X-Vocab',
-          includeFlashcards: settings.obsidianIncludeFlashcards,
-        }).catch(() => undefined)
+      if (settings.obsidianAutoSync && cardsForObsidian.length > 0 && newCards.length > 0) {
+        const subfolder = settings.obsidianSubfolder.trim() || 'X-Vocab'
+        const srDeckTag = settings.obsidianSrDeckTag || '#flashcards/x-vocab'
+        const srCardStyle = settings.obsidianSrCardStyle || 'multiline'
+        const srSubdeckByCategory = settings.obsidianSrSubdeckByCategory ?? false
+        const srSeedProgress = settings.obsidianSrSyncProgress ?? true
+        const srIncludeAudio = settings.obsidianSrAudio ?? true
+        const srAudioAutoplay = settings.obsidianSrAudioAutoplay ?? true
+        const ttsAccent = settings.ttsAccent || 'en-US'
+
+        if (
+          settings.obsidianSyncMode === 'rest_api' &&
+          settings.obsidianRestUrl.trim() &&
+          settings.obsidianRestApiKey.trim()
+        ) {
+          void syncObsidianRest({
+            cards: cardsForObsidian,
+            apiUrl: settings.obsidianRestUrl.trim(),
+            apiKey: settings.obsidianRestApiKey.trim(),
+            subfolder,
+            includeFlashcards: settings.obsidianIncludeFlashcards,
+            srDeckTag,
+            srCardStyle,
+            srSubdeckByCategory,
+            srSeedProgress,
+            srIncludeAudio,
+            srAudioAutoplay,
+            ttsAccent,
+            backendOnline,
+          }).catch(() => undefined)
+        } else if (
+          settings.obsidianSyncMode !== 'rest_api' &&
+          settings.obsidianVaultPath.trim() &&
+          backendOnline
+        ) {
+          void syncObsidianVault({
+            cards: cardsForObsidian,
+            vaultPath: settings.obsidianVaultPath.trim(),
+            subfolder,
+            includeFlashcards: settings.obsidianIncludeFlashcards,
+            srDeckTag,
+            srCardStyle,
+            srSubdeckByCategory,
+            srSeedProgress,
+            srIncludeAudio,
+            srAudioAutoplay,
+            ttsAccent,
+          }).catch(() => undefined)
+        }
       }
     },
     [
       persistState,
       backendOnline,
       settings.obsidianAutoSync,
+      settings.obsidianSyncMode,
+      settings.obsidianRestUrl,
+      settings.obsidianRestApiKey,
       settings.obsidianVaultPath,
       settings.obsidianSubfolder,
       settings.obsidianIncludeFlashcards,
+      settings.obsidianSrDeckTag,
+      settings.obsidianSrCardStyle,
+      settings.obsidianSrSubdeckByCategory,
+      settings.obsidianSrSyncProgress,
+      settings.obsidianSrAudio,
+      settings.obsidianSrAudioAutoplay,
+      settings.ttsAccent,
     ],
   )
 
@@ -492,6 +557,19 @@ export default function App() {
             onImportStateBackup={(merged) => {
               persistState(() => merged, backendOnline)
             }}
+            onMergePulledCards={(updatedCards) => {
+              persistState((prev) => {
+                const byId = new Map(updatedCards.map((c) => [c.id, c]))
+                const byWord = new Map(updatedCards.map((c) => [c.word.trim().toLowerCase(), c]))
+                return {
+                  ...prev,
+                  cards: prev.cards.map(
+                    (existing) =>
+                      byId.get(existing.id) ?? byWord.get(existing.word.trim().toLowerCase()) ?? existing,
+                  ),
+                }
+              }, backendOnline)
+            }}
             onNotify={notify}
           />
         )}
@@ -502,6 +580,7 @@ export default function App() {
           open={settingsOpen}
           settings={settings}
           backendOnline={backendOnline}
+          onBackendOnline={() => setBackendOnline(true)}
           onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />

@@ -1,4 +1,23 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
+let storageQueue = Promise.resolve();
+
+function enqueueStorageTask(fn) {
+  const next = storageQueue.then(fn, fn);
+  storageQueue = next.catch(() => {});
+  return next;
+}
+
+function storageGet(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, (data) => resolve(data || {}));
+  });
+}
+
+function storageSet(obj) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(obj, () => resolve());
+  });
+}
 
 function updateBadge(count) {
   const text = count > 0 ? String(count > 999 ? "999+" : count) : "";
@@ -14,7 +33,8 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "SAVE_TWEETS") {
-    chrome.storage.local.get(["tweets"], (data) => {
+    enqueueStorageTask(async () => {
+      const data = await storageGet(["tweets"]);
       const existing = Array.isArray(data.tweets) ? data.tweets : [];
       const seen = new Set(existing.map((t) => t.id));
       let added = 0;
@@ -25,10 +45,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           added += 1;
         }
       }
-      chrome.storage.local.set({ tweets: existing }, () => {
-        updateBadge(existing.length);
-        sendResponse({ added, total: existing.length });
-      });
+      await storageSet({ tweets: existing });
+      updateBadge(existing.length);
+      sendResponse({ added, total: existing.length });
     });
     return true;
   }
@@ -45,7 +64,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "CLEAR_TWEETS") {
-    chrome.storage.local.set({ tweets: [] }, () => {
+    enqueueStorageTask(async () => {
+      await storageSet({ tweets: [] });
       updateBadge(0);
       sendResponse({ ok: true });
     });
