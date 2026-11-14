@@ -97,6 +97,9 @@ export async function ingestTweetsToBackend(tweets: TweetItem[]): Promise<{ adde
 export async function extractCandidates(params: {
   tweets?: TweetItem[]
   filter_tier: FilterTier
+  custom_vocab_limit?: number
+  custom_zipf_min?: number
+  custom_zipf_max?: number
   known_words: string[]
   ignored_words: string[]
   max_candidates?: number
@@ -108,6 +111,9 @@ export async function extractCandidates(params: {
     body: JSON.stringify({
       tweets: params.tweets,
       filter_tier: params.filter_tier,
+      ...(params.custom_vocab_limit !== undefined ? { custom_vocab_limit: params.custom_vocab_limit } : {}),
+      ...(params.custom_zipf_min !== undefined ? { custom_zipf_min: params.custom_zipf_min } : {}),
+      ...(params.custom_zipf_max !== undefined ? { custom_zipf_max: params.custom_zipf_max } : {}),
       known_words: params.known_words,
       ignored_words: params.ignored_words,
       max_candidates: params.max_candidates ?? 80,
@@ -153,6 +159,8 @@ export async function enrichCandidates(params: {
   candidates: CandidateWord[]
   settings: UserSettings
   autoSave?: boolean
+  filterTier?: FilterTier
+  customVocabLimit?: number
 }): Promise<EnrichResponse> {
   const resp = await fetch('/api/enrich', {
     method: 'POST',
@@ -161,6 +169,8 @@ export async function enrichCandidates(params: {
       candidates: params.candidates,
       llm_config: buildLlmOverrideConfig(params.settings),
       auto_save: params.autoSave ?? true,
+      filter_tier: params.filterTier ?? params.settings.filterTier,
+      custom_vocab_limit: params.customVocabLimit ?? params.settings.customVocabLimit,
     }),
   })
   if (!resp.ok) throw new Error(await parseErrorMessage(resp))

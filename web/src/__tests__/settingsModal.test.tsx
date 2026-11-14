@@ -169,7 +169,7 @@ describe('SettingsModal LLM connectivity test', () => {
     fireEvent.click(screen.getByRole('button', { name: /测试 Obsidian 连通性/ }))
 
     await waitFor(() => {
-      expect(screen.getByText(/连通成功/)).toBeInTheDocument()
+      expect(screen.getByText(/浏览器已直连 Obsidian Local REST API/)).toBeInTheDocument()
     })
     expect(screen.getByText('浏览器直连')).toBeInTheDocument()
 
@@ -192,5 +192,46 @@ describe('SettingsModal LLM connectivity test', () => {
       }),
     )
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('supports extended vocabulary filter tiers and custom Zipf/cutoff controls', () => {
+    const onSave = vi.fn()
+    const onClose = vi.fn()
+
+    render(
+      <SettingsModal
+        open={true}
+        settings={DEFAULT_SETTINGS}
+        backendOnline={true}
+        onSave={onSave}
+        onClose={onClose}
+      />,
+    )
+
+    const tierSelect = screen.getByLabelText('默认词频过滤梯队') as HTMLSelectElement
+    expect(Array.from(tierSelect.options).map((o) => o.value)).toEqual([
+      'strict_1200',
+      'basic_2000',
+      'cet4_3500',
+      'cet6_5500',
+      'ielts_8000',
+      'advanced_12000',
+      'custom',
+    ])
+
+    fireEvent.change(tierSelect, { target: { value: 'custom' } })
+    fireEvent.change(screen.getByLabelText('屏蔽前 N 高频词'), { target: { value: '9000' } })
+    fireEvent.change(screen.getByLabelText('Zipf 下限（更冷门）'), { target: { value: '1.6' } })
+    fireEvent.change(screen.getByLabelText('Zipf 上限（更常见）'), { target: { value: '4.2' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filterTier: 'custom',
+        customVocabLimit: 9000,
+        customZipfMin: 1.6,
+        customZipfMax: 4.2,
+      }),
+    )
   })
 })

@@ -55,3 +55,68 @@ def test_extract_candidates_filters_basic_2000_and_catches_phrasal_verbs():
     assert "scale down" in lemmas
     assert "ngl" in lemmas
     assert "tbh" in lemmas
+
+
+def test_extract_candidates_supports_advanced_tiers_custom_bounds_and_collocations():
+    tweets = [
+        TweetItem(
+            id="adv-1",
+            author_handle="researcher",
+            url="https://x.com/researcher/status/1",
+            text=(
+                "We are facing diminishing returns here: what used to look like a paradigm shift "
+                "soon boiled down to ephemeral hype and idiosyncratic edge cases, though agentic "
+                "workflows keep ushering in subtle gains along the learning curve. Copium won't fix "
+                "this ubiquitous bottleneck or recalcitrant momentum."
+            ),
+        )
+    ]
+
+    # Advanced 12000 tier filters top 12000 lemmas while keeping rare C1/C2 words & collocations
+    advanced = extract_candidates(
+        tweets=tweets,
+        filter_tier="advanced_12000",
+        include_slang=True,
+    )
+    adv_lemmas = {c.lemma for c in advanced}
+    assert "ephemeral" in adv_lemmas
+    assert "idiosyncratic" in adv_lemmas
+    assert "recalcitrant" in adv_lemmas
+    assert "diminishing return" in adv_lemmas
+    assert "learning curve" in adv_lemmas
+    assert "paradigm shift" in adv_lemmas
+    assert "edge case" in adv_lemmas
+    assert "boil down" in adv_lemmas
+    assert "usher in" in adv_lemmas
+    assert "copium" in adv_lemmas
+    assert "agentic" in adv_lemmas
+    # Words inside top 12000 must be filtered out at advanced_12000
+    assert "ubiquitous" not in adv_lemmas
+    assert "momentum" not in adv_lemmas
+    assert "gain" not in adv_lemmas
+    assert "face" not in adv_lemmas
+
+    # IELTS 8000 tier filters top 8000 words while retaining ubiquitous (~rank 11500) & ephemeral
+    ielts = extract_candidates(
+        tweets=tweets,
+        filter_tier="ielts_8000",
+        include_slang=False,
+    )
+    ielts_lemmas = {c.lemma for c in ielts}
+    assert "ubiquitous" in ielts_lemmas
+    assert "ephemeral" in ielts_lemmas
+    assert "momentum" not in ielts_lemmas
+    assert "copium" not in ielts_lemmas
+
+    # Custom tier lets user dial filtering and Zipf window manually
+    custom = extract_candidates(
+        tweets=tweets,
+        filter_tier="custom",
+        custom_vocab_limit=15000,
+        custom_zipf_min=1.5,
+        custom_zipf_max=3.8,
+        include_slang=True,
+    )
+    custom_lemmas = {c.lemma for c in custom}
+    assert "ephemeral" in custom_lemmas
+    assert "bottleneck" in custom_lemmas or "paradigm shift" in custom_lemmas

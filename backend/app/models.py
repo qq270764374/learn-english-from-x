@@ -49,8 +49,22 @@ class CandidateWord(BaseModel):
     sample_tweets: list[SampleContext]
 
 
+FilterTier = Literal[
+    "strict_1200",
+    "basic_2000",
+    "cet4_3500",
+    "cet6_5500",
+    "ielts_8000",
+    "advanced_12000",
+    "custom",
+]
+
+
 class ExtractRequest(BaseModel):
-    filter_tier: Literal["strict_1200", "basic_2000", "cet4_3500"] = "basic_2000"
+    filter_tier: FilterTier = "basic_2000"
+    custom_vocab_limit: int = Field(default=5500, ge=0, le=25000)
+    custom_zipf_min: float = Field(default=1.8, ge=1.0, le=5.8)
+    custom_zipf_max: float = Field(default=5.0, ge=1.2, le=6.5)
     known_words: list[str] = Field(default_factory=list)
     ignored_words: list[str] = Field(default_factory=list)
     max_candidates: int = 80
@@ -74,6 +88,8 @@ class EnrichRequest(BaseModel):
     candidates: list[CandidateWord]
     llm_config: LLMOverrideConfig | None = None
     auto_save: bool = True
+    filter_tier: FilterTier = "basic_2000"
+    custom_vocab_limit: int = Field(default=5500, ge=0, le=25000)
 
 
 class LLMTestRequest(BaseModel):

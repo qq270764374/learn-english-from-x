@@ -17,14 +17,17 @@ import {
   fetchDemoTweets,
   ingestTweetsToBackend,
 } from '../services/api'
-import type {
-  CandidateWord,
-  FilterTier,
-  StarterCreator,
-  SyncStateDocument,
-  TweetItem,
-  UserSettings,
-  VocabCard,
+import {
+  FILTER_TIER_OPTIONS,
+  getFilterTierOption,
+  normalizeCustomFilterParams,
+  type CandidateWord,
+  type FilterTier,
+  type StarterCreator,
+  type SyncStateDocument,
+  type TweetItem,
+  type UserSettings,
+  type VocabCard,
 } from '../types/vocab'
 
 interface IngestConsoleProps {
@@ -57,6 +60,33 @@ export function IngestConsole({
   onNotify,
 }: IngestConsoleProps) {
   const [filterTier, setFilterTier] = useState<FilterTier>(settings.filterTier)
+  const [customVocabLimit, setCustomVocabLimit] = useState<number>(settings.customVocabLimit)
+  const [customZipfMin, setCustomZipfMin] = useState<number>(settings.customZipfMin)
+  const [customZipfMax, setCustomZipfMax] = useState<number>(settings.customZipfMax)
+  const [syncedTierPrefs, setSyncedTierPrefs] = useState({
+    filterTier: settings.filterTier,
+    customVocabLimit: settings.customVocabLimit,
+    customZipfMin: settings.customZipfMin,
+    customZipfMax: settings.customZipfMax,
+  })
+  if (
+    syncedTierPrefs.filterTier !== settings.filterTier ||
+    syncedTierPrefs.customVocabLimit !== settings.customVocabLimit ||
+    syncedTierPrefs.customZipfMin !== settings.customZipfMin ||
+    syncedTierPrefs.customZipfMax !== settings.customZipfMax
+  ) {
+    const nextPrefs = {
+      filterTier: settings.filterTier,
+      customVocabLimit: settings.customVocabLimit,
+      customZipfMin: settings.customZipfMin,
+      customZipfMax: settings.customZipfMax,
+    }
+    setSyncedTierPrefs(nextPrefs)
+    setFilterTier(nextPrefs.filterTier)
+    setCustomVocabLimit(nextPrefs.customVocabLimit)
+    setCustomZipfMin(nextPrefs.customZipfMin)
+    setCustomZipfMax(nextPrefs.customZipfMax)
+  }
   const [includeSlang, setIncludeSlang] = useState(true)
   const [candidates, setCandidates] = useState<CandidateWord[]>([])
   const [selectedLemmas, setSelectedLemmas] = useState<Set<string>>(new Set())
@@ -189,10 +219,22 @@ export function IngestConsole({
     }
 
     setExtracting(true)
+    const customNormalized = normalizeCustomFilterParams({
+      customVocabLimit,
+      customZipfMin,
+      customZipfMax,
+    })
     try {
       const res = await extractCandidates({
         tweets,
         filter_tier: filterTier,
+        ...(filterTier === 'custom'
+          ? {
+              custom_vocab_limit: customNormalized.customVocabLimit,
+              custom_zipf_min: customNormalized.customZipfMin,
+              custom_zipf_max: customNormalized.customZipfMax,
+            }
+          : {}),
         known_words: [...syncState.known_words, ...syncState.cards.map((c) => c.word)],
         ignored_words: syncState.ignored_words,
         max_candidates: 60,
@@ -241,11 +283,18 @@ export function IngestConsole({
     }
 
     setEnriching(true)
+    const customNormalized = normalizeCustomFilterParams({
+      customVocabLimit,
+      customZipfMin,
+      customZipfMax,
+    })
     try {
       const res = await enrichCandidates({
         candidates: selected,
         settings,
         autoSave: true,
+        filterTier,
+        customVocabLimit: customNormalized.customVocabLimit,
       })
       const tweetIds = new Set<string>()
       selected.forEach((c) => c.sample_tweets.forEach((s) => tweetIds.add(s.tweet_id)))
@@ -424,9 +473,11 @@ export function IngestConsole({
               value={filterTier}
               onChange={(e) => setFilterTier(e.target.value as FilterTier)}
             >
-              <option value="strict_1200">核心 1200 词（最严格保留初中级词）</option>
-              <option value="basic_2000">基础 2000 词（推荐四级以下起步）</option>
-              <option value="cet4_3500">四级 3500 词（进阶词汇筛选）</option>
+              {FILTER_TIER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -437,7 +488,7 @@ export function IngestConsole({
               checked={includeSlang}
               onChange={(e) => setIncludeSlang(e.target.checked)}
             />
-            <span>包含 X 常见缩写与游戏/AI俚语 (ngl / tbh / nerf)</span>
+            <span>包含 X 常见缩写与科技/AI/游戏俚语 (ngl / tbh / copium / agentic)</span>
           </label>
 
           <button
@@ -451,6 +502,65 @@ export function IngestConsole({
             {extracting ? '正在分词与词频计算...' : '提取高性价比生词'}
           </button>
         </div>
+
+        <div className="field-hint" style={{ marginTop: 8 }}>
+          当前筛选策略：{getFilterTierOption(filterTier).description}
+        </div>
+
+        {filterTier === 'custom' && (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: 12,
+              marginTop: 10,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-subtle, rgba(128, 128, 128, 0.05))',
+            }}
+          >
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label htmlFor="input-extract-custom-limit">屏蔽前 N 高频词</label>
+              <input
+                id="input-extract-custom-limit"
+                className="input"
+                type="number"
+                min={0}
+                max={25000}
+                step={500}
+                value={customVocabLimit}
+                onChange={(e) => setCustomVocabLimit(Number(e.target.value))}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label htmlFor="input-extract-custom-zipf-min">Zipf 下限（更冷门）</label>
+              <input
+                id="input-extract-custom-zipf-min"
+                className="input"
+                type="number"
+                min={1.0}
+                max={5.8}
+                step={0.1}
+                value={customZipfMin}
+                onChange={(e) => setCustomZipfMin(Number(e.target.value))}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label htmlFor="input-extract-custom-zipf-max">Zipf 上限（更常见）</label>
+              <input
+                id="input-extract-custom-zipf-max"
+                className="input"
+                type="number"
+                min={1.3}
+                max={6.5}
+                step={0.1}
+                value={customZipfMax}
+                onChange={(e) => setCustomZipfMax(Number(e.target.value))}
+              />
+            </div>
+          </div>
+        )}
 
         {candidates.length > 0 && (
           <>

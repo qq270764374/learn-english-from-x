@@ -381,7 +381,7 @@ describe('obsidianRest service', () => {
       backendOnline: false,
     })
 
-    const uploadedCard = putBodies.find((b) => b.includes('figure out')) ?? ''
+    const uploadedCard = putBodies.find((b) => b.includes('# figure out')) ?? ''
     expect(uploadedCard).toContain(`<audio controls autoplay src="${gbUrl}"></audio>`)
   })
 })

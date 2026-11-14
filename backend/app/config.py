@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
-    # Extraction defaults tuned for learners starting below CET-4
-    default_filter_tier: str = "basic_2000"  # "strict_1200" | "basic_2000" | "cet4_3500"
+    # Extraction defaults: strict_1200 | basic_2000 | cet4_3500 | cet6_5500 | ielts_8000 | advanced_12000 | custom
+    default_filter_tier: str = "basic_2000"
     zipf_min: float = 2.4
     zipf_max: float = 5.6
 

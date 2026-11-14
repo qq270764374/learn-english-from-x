@@ -8,17 +8,98 @@ from pathlib import Path
 
 import lemminflect
 import simplemma
-from wordfreq import zipf_frequency
+from wordfreq import top_n_list, zipf_frequency
 
 from app.models import CandidateWord, SampleContext, TweetItem
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-TIER_LIMITS = {
-    "strict_1200": 1200,
-    "basic_2000": 2000,
-    "cet4_3500": 3500,
+TIER_PROFILES: dict[str, dict[str, float | int]] = {
+    "strict_1200": {
+        "limit": 1200,
+        "zipf_min": 2.4,
+        "zipf_max": 5.8,
+        "sweet_low": 3.8,
+        "sweet_high": 5.3,
+        "sweet_center": 4.55,
+        "proper_noun_floor": 3.0,
+    },
+    "basic_2000": {
+        "limit": 2000,
+        "zipf_min": 2.2,
+        "zipf_max": 5.7,
+        "sweet_low": 3.6,
+        "sweet_high": 5.1,
+        "sweet_center": 4.35,
+        "proper_noun_floor": 3.0,
+    },
+    "cet4_3500": {
+        "limit": 3500,
+        "zipf_min": 2.1,
+        "zipf_max": 5.5,
+        "sweet_low": 3.3,
+        "sweet_high": 4.8,
+        "sweet_center": 4.05,
+        "proper_noun_floor": 2.9,
+    },
+    "cet6_5500": {
+        "limit": 5500,
+        "zipf_min": 1.9,
+        "zipf_max": 5.2,
+        "sweet_low": 2.9,
+        "sweet_high": 4.5,
+        "sweet_center": 3.7,
+        "proper_noun_floor": 2.7,
+    },
+    "ielts_8000": {
+        "limit": 8000,
+        "zipf_min": 1.7,
+        "zipf_max": 4.9,
+        "sweet_low": 2.5,
+        "sweet_high": 4.1,
+        "sweet_center": 3.3,
+        "proper_noun_floor": 2.5,
+    },
+    "advanced_12000": {
+        "limit": 12000,
+        "zipf_min": 1.5,
+        "zipf_max": 4.6,
+        "sweet_low": 2.0,
+        "sweet_high": 3.7,
+        "sweet_center": 2.85,
+        "proper_noun_floor": 2.3,
+    },
 }
+
+TIER_LIMITS = {tier: int(profile["limit"]) for tier, profile in TIER_PROFILES.items()}
+
+
+def resolve_tier_profile(
+    filter_tier: str = "basic_2000",
+    *,
+    custom_vocab_limit: int = 5500,
+    custom_zipf_min: float = 1.8,
+    custom_zipf_max: float = 5.0,
+) -> dict[str, float | int]:
+    """Resolve vocabulary cutoff and Zipf scoring profile for named or custom tiers."""
+    if filter_tier != "custom":
+        return dict(TIER_PROFILES.get(filter_tier, TIER_PROFILES["basic_2000"]))
+
+    limit = max(0, min(25000, int(custom_vocab_limit)))
+    zmin = max(1.0, min(5.8, float(custom_zipf_min)))
+    zmax = max(zmin + 0.3, min(6.5, float(custom_zipf_max)))
+    span = zmax - zmin
+    sweet_low = round(zmin + span * 0.2, 2)
+    sweet_high = round(zmax - span * 0.2, 2)
+    return {
+        "limit": limit,
+        "zipf_min": round(zmin, 2),
+        "zipf_max": round(zmax, 2),
+        "sweet_low": sweet_low,
+        "sweet_high": sweet_high,
+        "sweet_center": round((sweet_low + sweet_high) / 2, 2),
+        "proper_noun_floor": round(min(3.0, zmin + 0.6), 2),
+    }
 
 PHRASAL_VERBS: dict[str, str] = {
     "adapt to": "适应",
@@ -88,6 +169,87 @@ PHRASAL_VERBS: dict[str, str] = {
     "wind up": "最终落得",
     "work out": "解决；锻炼；奏效",
     "wrap up": "收尾，总结完成",
+    "boil down": "归结为，本质上是",
+    "branch out": "拓展新业务或领域",
+    "brush up": "复习，重温巩固",
+    "call out": "公开点名批评，指出问题",
+    "cash in": "套现，趁机获利",
+    "clamp down": "严厉打压，收紧管控",
+    "crop up": "突然冒出，意外出现",
+    "dive into": "深入钻研，一头扎进",
+    "draw on": "借鉴，利用",
+    "drop off": "骤降；顺路送达",
+    "dwell on": "老想着，反复纠结",
+    "ease off": "缓和，减弱",
+    "factor in": "把……考虑在内",
+    "fade out": "逐渐消失，淡出",
+    "fall apart": "崩溃，瓦解",
+    "fall short": "未达预期，不足",
+    "fend off": "抵挡，击退",
+    "flesh out": "充实细节，使具体化",
+    "follow through": "贯彻到底，兑现承诺",
+    "gear up": "做好准备，蓄势待发",
+    "gloss over": "轻描淡写，掩盖",
+    "hammer out": "反复协商后敲定",
+    "hinge on": "取决于，以……为转移",
+    "iron out": "消除分歧，理顺细节",
+    "latch onto": "紧紧抓住，蹭热度/依附",
+    "lay out": "清晰阐述，规划布置",
+    "level up": "升级，提升水平",
+    "lock in": "锁定；全神贯注投入",
+    "map out": "详细规划，绘制蓝图",
+    "narrow down": "缩小范围，逐一排除",
+    "opt out": "选择退出",
+    "phase out": "逐步淘汰",
+    "pin down": "准确定位；迫使明确表态",
+    "play down": "淡化，贬低重要性",
+    "push back": "反对，回击，推迟",
+    "ramp up": "加大力度，加速提升",
+    "rule out": "排除……的可能性",
+    "shrug off": "耸肩不在乎，轻松摆脱",
+    "spell out": "说清楚，明确阐述",
+    "spin off": "分拆独立；衍生",
+    "spur on": "激励，促使前进",
+    "stem from": "源自，由……引起",
+    "stumble across": "偶然发现",
+    "stumble upon": "无意中遇到或发现",
+    "taper off": "逐渐减弱，逐步缩减",
+    "tear down": "拆解剖析；推翻",
+    "tone down": "语气放缓，降温",
+    "trade off": "权衡取舍",
+    "usher in": "开启，迎来（新时代/变革）",
+    "ward off": "避开，挡住",
+    "water down": "稀释，削弱（标准/内容）",
+    "weed out": "淘汰，清除无用项",
+    "zero in": "聚焦，瞄准关键",
+    "zoom out": "拉远视角，从全局审视",
+}
+
+TWO_WORD_COLLOCATIONS: dict[str, str] = {
+    "diminishing return": "边际收益递减",
+    "silver bullet": "银弹，一招解决难题的万能方案",
+    "rabbit hole": "兔子洞（越陷越深、令人着迷的探索坑）",
+    "edge case": "边缘情况，极端特例",
+    "first principle": "第一性原理，底层本质推演",
+    "paradigm shift": "范式转移，根本性变革",
+    "status quo": "现状，现有局面",
+    "sanity check": "合理性检查，快速校验",
+    "feedback loop": "反馈闭环",
+    "rule of": "经验法则（rule of thumb 等常见搭配）",
+    "north star": "北极星指标，核心指引目标",
+    "slippery slope": "滑坡谬误；一旦开始就难以收手的恶性循环",
+    "cognitive load": "认知负荷",
+    "deep dive": "深度剖析，专题深潜",
+    "pain point": "痛点",
+    "game changer": "颠覆局面的关键事物",
+    "straw man": "稻草人论证（歪曲对方观点后再反驳）",
+    "steel man": "钢人论证（把对方观点补强到最佳状态后再讨论）",
+    "zero sum": "零和博弈",
+    "echo chamber": "信息茧房，回音室效应",
+    "critical mass": "临界规模，质变门槛",
+    "learning curve": "学习曲线，上手难度梯度",
+    "silver lining": "一线希望，坏事中的积极面",
+    "turning point": "转折点",
 }
 
 PARTICLES = {
@@ -104,6 +266,13 @@ PARTICLES = {
     "to",
     "into",
     "with",
+    "around",
+    "about",
+    "apart",
+    "aside",
+    "across",
+    "forth",
+    "from",
 }
 
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
@@ -169,6 +338,26 @@ def load_basic_vocab_list() -> list[str]:
 
 
 @lru_cache(maxsize=1)
+def load_extended_vocab_list() -> list[str]:
+    """Extend the 3,500-word base list up to 25,000 deduplicated lemmas via wordfreq."""
+    ranked = list(load_basic_vocab_list())
+    seen = set(ranked)
+    for token in top_n_list("en", 60000):
+        low = token.lower()
+        if len(low) < 2 or not (low.isascii() and low.isalpha()):
+            continue
+        lemma, _ = lemmatize_word(low)
+        if len(lemma) < 2 or not (lemma.isascii() and lemma.isalpha()):
+            continue
+        if lemma not in seen:
+            seen.add(lemma)
+            ranked.append(lemma)
+            if len(ranked) >= 25000:
+                break
+    return ranked
+
+
+@lru_cache(maxsize=1)
 def load_slang_seed() -> dict[str, dict[str, str]]:
     path = DATA_DIR / "slang_seed.json"
     if not path.exists():
@@ -227,26 +416,56 @@ def compute_sweet_spot_score(
     zipf_score: float,
     is_phrase: bool,
     is_slang_seed: bool,
+    *,
+    sweet_low: float = 3.6,
+    sweet_high: float = 5.1,
+    sweet_center: float = 4.35,
 ) -> float:
     """
-    Score candidate words for learners below CET-4:
-    Prioritizes words that appear multiple times in user's tweets AND fall in the
-    high-ROI Zipf band (3.6 - 5.1, i.e., practical everyday / CET-4 core English).
+    Score candidate words according to the selected learner tier's Zipf sweet spot:
+    Prioritizes words that recur in the user's tweets AND match the target proficiency band.
     """
     freq_bonus = min(corpus_count, 5) * 1.6
     if is_phrase:
         band_score = 4.2
     elif is_slang_seed:
         band_score = 3.5
-    elif 3.6 <= zipf_score <= 5.1:
-        band_score = 4.5 - abs(zipf_score - 4.35) * 0.8
-    elif 2.8 <= zipf_score < 3.6:
-        band_score = 2.8
-    elif 5.1 < zipf_score <= 5.6:
+    elif sweet_low <= zipf_score <= sweet_high:
+        band_score = max(2.8, 4.5 - abs(zipf_score - sweet_center) * 0.8)
+    elif (sweet_low - 0.8) <= zipf_score < sweet_low:
+        band_score = 3.0
+    elif sweet_high < zipf_score <= (sweet_high + 0.5):
         band_score = 2.4
     else:
-        band_score = 1.2
+        band_score = 1.4
     return round(freq_bonus + band_score, 2)
+
+
+def _record_phrase_candidate(
+    stats: dict[str, dict],
+    *,
+    phrase: str,
+    surface: str,
+    pos: str,
+    hint: str,
+    tweet: TweetItem,
+) -> None:
+    entry = stats[phrase]
+    entry["surface_forms"].add(surface)
+    entry["pos"] = pos
+    entry["is_phrase"] = True
+    entry["slang_hint"] = hint
+    entry["count"] += 1
+    if tweet.id not in entry["tweet_ids"] and len(entry["samples"]) < 3:
+        entry["tweet_ids"].add(tweet.id)
+        entry["samples"].append(
+            SampleContext(
+                tweet_id=tweet.id,
+                author_handle=tweet.author_handle,
+                url=tweet.url,
+                text=tweet.text,
+            )
+        )
 
 
 def extract_candidates(
@@ -256,10 +475,29 @@ def extract_candidates(
     ignored_words: list[str] | None = None,
     max_candidates: int = 80,
     include_slang: bool = True,
+    custom_vocab_limit: int = 5500,
+    custom_zipf_min: float = 1.8,
+    custom_zipf_max: float = 5.0,
 ) -> list[CandidateWord]:
+    profile = resolve_tier_profile(
+        filter_tier,
+        custom_vocab_limit=custom_vocab_limit,
+        custom_zipf_min=custom_zipf_min,
+        custom_zipf_max=custom_zipf_max,
+    )
+    limit = int(profile["limit"])
+    zipf_min = float(profile["zipf_min"])
+    zipf_max = float(profile["zipf_max"])
+    sweet_low = float(profile["sweet_low"])
+    sweet_high = float(profile["sweet_high"])
+    sweet_center = float(profile["sweet_center"])
+    proper_noun_floor = float(profile["proper_noun_floor"])
+
     ranked_basic = load_basic_vocab_list()
-    limit = TIER_LIMITS.get(filter_tier, 2000)
-    basic_set = set(ranked_basic[:limit])
+    if limit <= len(ranked_basic):
+        basic_set = set(ranked_basic[:limit])
+    else:
+        basic_set = set(load_extended_vocab_list()[:limit])
 
     skip_set = set(w.strip().lower() for w in (known_words or []) if w.strip())
     skip_set.update(w.strip().lower() for w in (ignored_words or []) if w.strip())
@@ -318,10 +556,10 @@ def extract_candidates(
 
                 z = zipf_frequency(lemma, "en")
                 # Filter out unknown gibberish / ultra-rare proper nouns unless in slang seed
-                if not is_slang and (z < 2.2 or z > 5.7):
+                if not is_slang and (z < zipf_min or z > zipf_max):
                     continue
                 # Skip likely standalone proper nouns (capitalized mid-sentence with very low zipf)
-                if raw[0].isupper() and z < 3.0 and not is_slang:
+                if raw[0].isupper() and z < proper_noun_floor and not is_slang:
                     continue
 
                 entry = stats[lemma]
@@ -343,35 +581,45 @@ def extract_candidates(
                         )
                     )
 
-        # Phrasal verb detection pass
+        # Phrasal verb & high-value 2-word collocation detection pass
         for idx in range(len(normalized_seq) - 1):
             raw1, lemma1, _ = normalized_seq[idx]
             raw2, lemma2, _ = normalized_seq[idx + 1]
-            # Check raw2 lowercase too because particles stay particles
             part = raw2.lower()
-            if part not in PARTICLES:
-                continue
-            phrase = f"{lemma1} {part}"
-            if phrase not in PHRASAL_VERBS:
-                continue
-            if phrase in skip_set:
-                continue
-
-            entry = stats[phrase]
-            entry["surface_forms"].add(f"{raw1} {raw2}")
-            entry["pos"] = "phrasal_verb"
-            entry["is_phrase"] = True
-            entry["slang_hint"] = PHRASAL_VERBS[phrase]
-            entry["count"] += 1
-            if tweet.id not in entry["tweet_ids"] and len(entry["samples"]) < 3:
-                entry["tweet_ids"].add(tweet.id)
-                entry["samples"].append(
-                    SampleContext(
-                        tweet_id=tweet.id,
-                        author_handle=tweet.author_handle,
-                        url=tweet.url,
-                        text=tweet.text,
+            if part in PARTICLES:
+                phrase = f"{lemma1} {part}"
+                if phrase in PHRASAL_VERBS and phrase not in skip_set:
+                    _record_phrase_candidate(
+                        stats,
+                        phrase=phrase,
+                        surface=f"{raw1} {raw2}",
+                        pos="phrasal_verb",
+                        hint=PHRASAL_VERBS[phrase],
+                        tweet=tweet,
                     )
+                    continue
+
+            matched_colloc = next(
+                (
+                    candidate
+                    for candidate in (
+                        f"{lemma1} {lemma2}",
+                        f"{lemma1} {part}",
+                        f"{raw1.lower()} {lemma2}",
+                        f"{raw1.lower()} {part}",
+                    )
+                    if candidate in TWO_WORD_COLLOCATIONS
+                ),
+                "",
+            )
+            if matched_colloc and matched_colloc not in skip_set:
+                _record_phrase_candidate(
+                    stats,
+                    phrase=matched_colloc,
+                    surface=f"{raw1} {raw2}",
+                    pos="collocation",
+                    hint=TWO_WORD_COLLOCATIONS[matched_colloc],
+                    tweet=tweet,
                 )
 
     candidates: list[CandidateWord] = []
@@ -382,6 +630,9 @@ def extract_candidates(
             zipf_score=z,
             is_phrase=entry["is_phrase"],
             is_slang_seed=entry["is_slang_seed"],
+            sweet_low=sweet_low,
+            sweet_high=sweet_high,
+            sweet_center=sweet_center,
         )
         candidates.append(
             CandidateWord(

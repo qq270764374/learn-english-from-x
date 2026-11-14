@@ -19,30 +19,80 @@ from app.models import (
     utc_now_iso,
 )
 
-SYSTEM_PROMPT = """你是一位面向中国英语初学者的资深英语词汇教练。
-用户目前的英语水平在大学英语四级（CET-4）以下，正在通过阅读 X（Twitter）上科技、AI、游戏、音乐、生活类的真实英文推文来积累高频实用词汇。
+TIER_PROMPT_PROFILES: dict[str, tuple[str, str]] = {
+    "strict_1200": (
+        "面向英语零基础或初中级（约 1200 词起步）的中文学习者",
+        "给初学者的超直观记忆技巧、基础词根拆解或易混点提醒，语言通俗好懂",
+    ),
+    "basic_2000": (
+        "面向大学英语四级（CET-4）以下（约 2000 词起步）的中国英语学习者",
+        "给四级以下学习者的一句话记忆技巧、搭配用法或注意提示",
+    ),
+    "cet4_3500": (
+        "面向已具备大学英语四级（CET-4）基础、向六级进阶的中文学习者",
+        "重点说明该词在真实语境下的延伸义、常用固定搭配或近义词区别（避免过于基础的解释）",
+    ),
+    "cet6_5500": (
+        "面向具备大学英语六级（CET-6 / CEFR B2）水平、常态阅读英文长推的学习者",
+        "跳过入门铺垫，重点点出 B2–C1 语境精确义、熟词僻义、常用搭配及正式/口语色彩",
+    ),
+    "ielts_8000": (
+        "面向考研高分 / 雅思 7+ / 托福 100+ 水平（约 8000 词起步）的中高阶学习者",
+        "重点分析 C1 精准替换表达、熟词僻义、句中语气与语域差异（register），勿写基础记忆口诀",
+    ),
+    "advanced_12000": (
+        "面向 12000+ 词汇量（CEFR C1–C2 与母语者深度阅读）的高阶英语使用者",
+        "深入拆解 C1–C2 罕见词或地道表达的微妙语差（nuance）、修辞隐喻、母语者近义替换与语用边界",
+    ),
+}
+
+
+def build_system_prompt(filter_tier: str = "basic_2000", custom_vocab_limit: int = 5500) -> str:
+    """Build an LLM system prompt tailored to the learner's vocabulary proficiency tier."""
+    resolved_tier = filter_tier
+    if filter_tier == "custom":
+        if custom_vocab_limit <= 2500:
+            resolved_tier = "basic_2000"
+        elif custom_vocab_limit <= 4500:
+            resolved_tier = "cet4_3500"
+        elif custom_vocab_limit <= 7000:
+            resolved_tier = "cet6_5500"
+        elif custom_vocab_limit <= 10500:
+            resolved_tier = "ielts_8000"
+        else:
+            resolved_tier = "advanced_12000"
+
+    audience_desc, tip_guidance = TIER_PROMPT_PROFILES.get(
+        resolved_tier,
+        TIER_PROMPT_PROFILES["basic_2000"],
+    )
+    return f"""你是一位{audience_desc}的资深英语词汇教练。
+用户正在通过阅读 X（Twitter）上科技、AI、游戏、音乐、生活及深度观点类的真实英文推文来积累高价值词汇与地道表达。
 
 请根据给定的候选英文词/短语及其出现的原推文语境，输出严格合法的 JSON 对象，结构如下：
-{
+{{
   "items": [
-    {
+    {{
       "word": "候选词原形（必须与输入完全一致）",
       "ipa": "美式音标，例如 /ˈsʌtəl/",
       "pos": "在例句中的词性简写，如 n. / v. / adj. / adv. / phr.",
       "category": "只能是 standard | collocation | slang | ignore 之一",
-      "cefr_level": "A2 | B1 | B2 | C1 | slang",
+      "cefr_level": "A2 | B1 | B2 | C1 | C2 | slang",
       "meaning_zh": "贴合该原推文语境的精准简明中文释义（如有熟词僻义，重点写出此处含义）",
-      "memory_tip_zh": "给四级以下学习者的一句话记忆技巧、搭配用法或注意提示",
+      "memory_tip_zh": "{tip_guidance}",
       "sample_tweet_zh": "所选原推文的自然流畅中文整句翻译"
-    }
+    }}
   ]
-}
+}}
 
 分类规则：
-- standard：正经通用或常见专业高频词（值得主动记忆和复用）
-- collocation：短语动词、固定搭配或熟词僻义表达（如 figure out, ship a product, scale down）
-- slang：网络俚语、缩写或游戏/社媒黑话（如 ngl, tbh, nerf, slop，看懂即可）
+- standard：正经通用、高阶书面或常见专业高频词（值得主动记忆和复用）
+- collocation：短语动词、固定搭配、高阶习语或熟词僻义表达（如 figure out, diminishing returns, ship a product）
+- slang：网络俚语、缩写或游戏/AI/社媒黑话（如 ngl, tbh, nerf, slop, copium，看懂即可）
 - ignore：纯人名、品牌名、无实际学习价值的拼写错误或乱码"""
+
+
+SYSTEM_PROMPT = build_system_prompt("basic_2000")
 
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 PLACEHOLDER_API_KEYS = {"your_deepseek_api_key_here"}
@@ -216,6 +266,7 @@ async def _call_openai_compatible(
     api_key: str,
     base_url: str,
     model: str,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> dict[str, Any]:
     endpoint = _build_openai_chat_endpoint(base_url)
     headers = _build_openai_headers(api_key)
@@ -223,7 +274,7 @@ async def _call_openai_compatible(
     body: dict[str, Any] = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": _build_user_prompt(batch)},
         ],
         "temperature": 0.2,
@@ -250,11 +301,12 @@ async def _call_gemini(
     batch: list[CandidateWord],
     api_key: str,
     model: str,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> dict[str, Any]:
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     params = {"key": api_key}
     body = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": _build_user_prompt(batch)}]}],
         "generationConfig": {
             "temperature": 0.2,
@@ -559,11 +611,14 @@ async def test_llm_connection(override: LLMOverrideConfig | None = None) -> LLMT
 async def enrich_candidates(
     candidates: list[CandidateWord],
     override: LLMOverrideConfig | None = None,
+    filter_tier: str = "basic_2000",
+    custom_vocab_limit: int = 5500,
 ) -> tuple[list[VocabCard], list[str]]:
     if not candidates:
         return [], []
 
     provider, api_key, base_url, model = _resolve_llm_config(override)
+    system_prompt = build_system_prompt(filter_tier=filter_tier, custom_vocab_limit=custom_vocab_limit)
 
     cards: list[VocabCard] = []
     skipped_ignored: list[str] = []
@@ -576,13 +631,24 @@ async def enrich_candidates(
         if provider == "gemini":
             if not api_key:
                 raise ValueError("尚未配置 Gemini API Key，请在“设置”中填写或在 backend/.env 配置 GEMINI_API_KEY。")
-            parsed = await _call_gemini(batch, api_key=api_key, model=model)
+            parsed = await _call_gemini(
+                batch,
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+            )
         else:
             if not api_key and not _is_local_or_private_endpoint(base_url):
                 raise ValueError(
                     "尚未配置 DeepSeek / OpenAI 兼容 API Key，请在“设置”中填写或在 backend/.env 配置 LLM_API_KEY（若使用本地 Ollama/vLLM 等自建服务，请将 Base URL 设为 http://localhost:11434/v1 等本地地址即可免 Key）。"
                 )
-            parsed = await _call_openai_compatible(batch, api_key=api_key, base_url=base_url, model=model)
+            parsed = await _call_openai_compatible(
+                batch,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                system_prompt=system_prompt,
+            )
 
         now = utc_now_iso()
         for item in parsed.get("items", []):

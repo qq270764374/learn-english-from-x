@@ -2,14 +2,17 @@ import { Activity, AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, X } from 'lu
 import { useEffect, useState } from 'react'
 import { testLlmConnection } from '../services/api'
 import { normalizeSrDeckTag, testObsidianRestConnection } from '../services/obsidianRest'
-import type {
-  FilterTier,
-  LLMProvider,
-  LLMTestResponse,
-  ObsidianRestTestResponse,
-  ObsidianSrCardStyle,
-  ObsidianSyncMode,
-  UserSettings,
+import {
+  FILTER_TIER_OPTIONS,
+  getFilterTierOption,
+  normalizeCustomFilterParams,
+  type FilterTier,
+  type LLMProvider,
+  type LLMTestResponse,
+  type ObsidianRestTestResponse,
+  type ObsidianSrCardStyle,
+  type ObsidianSyncMode,
+  type UserSettings,
 } from '../types/vocab'
 
 interface SettingsModalProps {
@@ -22,8 +25,10 @@ interface SettingsModalProps {
 }
 
 function normalizeSavedSettings(draft: UserSettings): UserSettings {
+  const customFilter = normalizeCustomFilterParams(draft)
   return {
     ...draft,
+    ...customFilter,
     dailyNewLimit: Math.min(Math.max(Number(draft.dailyNewLimit) || 15, 3), 100),
     googleClientId: draft.googleClientId.trim(),
     llmBaseUrl: draft.llmBaseUrl.trim() || 'https://api.deepseek.com/v1',
@@ -694,10 +699,13 @@ export function SettingsModal({
                   value={draft.filterTier}
                   onChange={(e) => setDraft({ ...draft, filterTier: e.target.value as FilterTier })}
                 >
-                  <option value="strict_1200">核心 1200 词</option>
-                  <option value="basic_2000">基础 2000 词（推荐四级以下）</option>
-                  <option value="cet4_3500">四级 3500 词</option>
+                  {FILTER_TIER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.settingLabel}
+                    </option>
+                  ))}
                 </select>
+                <div className="field-hint">{getFilterTierOption(draft.filterTier).description}</div>
               </div>
               <div className="field">
                 <label htmlFor="input-daily-new">每日新词上限</label>
@@ -712,6 +720,61 @@ export function SettingsModal({
                 />
               </div>
             </div>
+
+            {draft.filterTier === 'custom' && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 12,
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-subtle, rgba(128, 128, 128, 0.05))',
+                }}
+              >
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label htmlFor="input-custom-vocab-limit">屏蔽前 N 高频词</label>
+                  <input
+                    id="input-custom-vocab-limit"
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={25000}
+                    step={500}
+                    value={draft.customVocabLimit}
+                    onChange={(e) => setDraft({ ...draft, customVocabLimit: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label htmlFor="input-custom-zipf-min">Zipf 下限（更冷门）</label>
+                  <input
+                    id="input-custom-zipf-min"
+                    className="input"
+                    type="number"
+                    min={1.0}
+                    max={5.8}
+                    step={0.1}
+                    value={draft.customZipfMin}
+                    onChange={(e) => setDraft({ ...draft, customZipfMin: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label htmlFor="input-custom-zipf-max">Zipf 上限（更常见）</label>
+                  <input
+                    id="input-custom-zipf-max"
+                    className="input"
+                    type="number"
+                    min={1.3}
+                    max={6.5}
+                    step={0.1}
+                    value={draft.customZipfMax}
+                    onChange={(e) => setDraft({ ...draft, customZipfMax: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="field">
               <label htmlFor="select-tts-accent">标准发音口音（浏览器语音合成）</label>

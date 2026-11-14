@@ -124,6 +124,9 @@ def extract_vocab(payload: ExtractRequest) -> ExtractResponse:
         ignored_words=ignored,
         max_candidates=payload.max_candidates,
         include_slang=payload.include_slang,
+        custom_vocab_limit=payload.custom_vocab_limit,
+        custom_zipf_min=payload.custom_zipf_min,
+        custom_zipf_max=payload.custom_zipf_max,
     )
     return ExtractResponse(total_tweets_analyzed=len(tweets), candidates=candidates)
 
@@ -139,6 +142,8 @@ async def enrich_vocab(payload: EnrichRequest) -> EnrichResponse:
         cards, skipped_ignored = await enrich_candidates(
             candidates=payload.candidates,
             override=payload.llm_config,
+            filter_tier=payload.filter_tier,
+            custom_vocab_limit=payload.custom_vocab_limit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

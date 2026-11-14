@@ -5,7 +5,7 @@ import respx
 import httpx
 
 from app.config import settings
-from app.llm.enricher import enrich_candidates, test_llm_connection
+from app.llm.enricher import build_system_prompt, enrich_candidates, test_llm_connection
 from app.main import app
 from app.models import CandidateWord, LLMOverrideConfig, SampleContext
 
@@ -316,4 +316,62 @@ def test_llm_test_endpoint_route():
     assert payload["ok"] is True
     assert payload["is_local"] is True
     assert payload["model"] == "deepseek-r1:7b"
+
+
+@pytest.mark.anyio
+async def test_enrich_candidates_adapts_system_prompt_for_advanced_tiers():
+    ielts_prompt = build_system_prompt("ielts_8000")
+    assert "雅思" in ielts_prompt
+    assert "C2" in ielts_prompt
+    assert "四级（CET-4）以下" not in ielts_prompt
+
+    cands = _make_candidates()[:1]
+    mock_payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "items": [
+                                {
+                                    "word": "subtle",
+                                    "ipa": "/ˈsʌtəl/",
+                                    "pos": "adj.",
+                                    "category": "standard",
+                                    "cefr_level": "C1",
+                                    "meaning_zh": "不易察觉的，精妙的",
+                                    "memory_tip_zh": "常用于描述细微语感差异",
+                                    "sample_tweet_zh": "起初差别很精妙。",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        ]
+    }
+
+    with respx.mock:
+        route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=mock_payload)
+        )
+        cards, _ = await enrich_candidates(
+            cands,
+            override=LLMOverrideConfig(
+                provider="openai_compatible",
+                api_key="test-key",
+                base_url="https://api.deepseek.com/v1",
+                model="deepseek-chat",
+            ),
+            filter_tier="advanced_12000",
+        )
+
+    assert route.called
+    sent_json = json.loads(route.calls[0].request.content.decode("utf-8"))
+    sent_system = sent_json["messages"][0]["content"]
+    assert "12000+" in sent_system
+    assert "C1–C2" in sent_system
+    assert len(cards) == 1
+    assert cards[0].cefr_level == "C1"
 
