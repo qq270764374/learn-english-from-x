@@ -1,0 +1,26 @@
+[project]
+name = "learn-english-from-x-backend"
+version = "0.1.0"
+description = "Hybrid NLP + DeepSeek/Gemini vocabulary extraction and Anki export service for LearnEnglishFromX"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "simplemma>=1.1.0",
+    "lemminflect>=0.2.3",
+    "wordfreq>=3.1.1",
+    "genanki>=0.13.0",
+    "httpx>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "respx>=0.22.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

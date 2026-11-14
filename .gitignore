@@ -1,0 +1,24 @@
+# Environment & secrets
+.env
+backend/.env
+
+# Python virtual environment & caches
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime local data store
+backend/data/
+
+# Node / Vite frontend artifacts
+node_modules/
+web/node_modules/
+web/dist/
+web/dist-ssr/
+*.local
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "LearnEnglishFromX 推文词汇采集器",
+  "version": "0.1.0",
+  "description": "在浏览 X.com（科技/AI/游戏/音乐/生活等英语账号）时零 API 费用采集英文推文，配合学习工具提取词汇。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LearnEnglishFromX 采集器"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

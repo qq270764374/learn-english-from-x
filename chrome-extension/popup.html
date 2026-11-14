@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>LearnEnglishFromX 采集器</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div>
+        <h1>LearnEnglishFromX</h1>
+        <p class="subtitle">X 英文推文零费用本地采集</p>
+      </div>
+      <span id="tweetCountBadge" class="count-pill">0 条</span>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="capture">采集控制</button>
+      <button class="tab" data-tab="creators">推荐博主</button>
+    </nav>
+
+    <section id="tab-capture" class="panel active">
+      <div class="card">
+        <div class="row-between">
+          <div>
+            <div class="label-title">被动浏览采集</div>
+            <div class="label-desc">开启后刷 X.com 自动收录英文推文</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="captureToggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label-title">自动温和滚动采集</div>
+        <div class="label-desc">随机停顿 1.8~3.4 秒模拟阅读，防风控</div>
+        <div class="scroll-row">
+          <input type="number" id="scrollCount" min="5" max="150" value="30" />
+          <button id="startAutoBtn" class="btn primary">开始滚动</button>
+          <button id="stopAutoBtn" class="btn ghost hidden">停止</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="pushBtn" class="btn primary full">推送到本地学习工具</button>
+        <div class="row-gap">
+          <button id="exportBtn" class="btn secondary">导出 JSON</button>
+          <button id="clearBtn" class="btn danger">清空缓存</button>
+        </div>
+      </div>
+
+      <div class="backend-row">
+        <label for="backendUrl">本地接口</label>
+        <input id="backendUrl" type="text" value="http://127.0.0.1:8765" />
+      </div>
+
+      <div id="statusMsg" class="status-msg"></div>
+    </section>
+
+    <section id="tab-creators" class="panel">
+      <div class="filter-chips" id="creatorFilters">
+        <button class="chip active" data-cat="全部">全部</button>
+        <button class="chip" data-cat="AI">AI</button>
+        <button class="chip" data-cat="科技">科技</button>
+        <button class="chip" data-cat="游戏">游戏</button>
+        <button class="chip" data-cat="音乐">音乐</button>
+        <button class="chip" data-cat="生活">生活</button>
+      </div>
+      <div class="creators-tip">点击博主即在新标签页打开 X 主页，开启采集即可收录。</div>
+      <div id="creatorsList" class="creators-list"></div>
+    </section>
+  </div>
+  <script src="starter_creators.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

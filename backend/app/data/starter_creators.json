@@ -1,0 +1,114 @@
+[
+  {
+    "handle": "karpathy",
+    "name": "Andrej Karpathy",
+    "category": "AI",
+    "url": "https://x.com/karpathy",
+    "difficulty": "中级过渡",
+    "description": "前 OpenAI / Tesla AI 核心科学家，常用清晰直观的英语解释 AI 原理与编程心得，高频实用表达极多。"
+  },
+  {
+    "handle": "emollick",
+    "name": "Ethan Mollick",
+    "category": "AI",
+    "url": "https://x.com/emollick",
+    "difficulty": "四级友好",
+    "description": "沃顿商学院教授，专注 AI 在学习与日常工作中的实战观察，句式规范、词汇实用度高。"
+  },
+  {
+    "handle": "simonw",
+    "name": "Simon Willison",
+    "category": "AI",
+    "url": "https://x.com/simonw",
+    "difficulty": "中级过渡",
+    "description": "Django 联合创始人，持续分享 AI 工具与工程实践，口语化技术表达地道。"
+  },
+  {
+    "handle": "MKBHD",
+    "name": "Marques Brownlee",
+    "category": "科技",
+    "url": "https://x.com/MKBHD",
+    "difficulty": "四级友好",
+    "description": "全球知名数码评测博主，句子短小精悍、日常口语化强，非常适合四级以下起步跟读。"
+  },
+  {
+    "handle": "WIRED",
+    "name": "WIRED",
+    "category": "科技",
+    "url": "https://x.com/WIRED",
+    "difficulty": "中级过渡",
+    "description": "知名科技与数字文化媒体，覆盖前沿技术、数码与日常生活，用词标准。"
+  },
+  {
+    "handle": "pcgamer",
+    "name": "PC Gamer",
+    "category": "游戏",
+    "url": "https://x.com/pcgamer",
+    "difficulty": "四级友好",
+    "description": "PC 游戏资讯与评测媒体，充满游戏体验、动作描述和玩家日常讨论高频词。"
+  },
+  {
+    "handle": "IGN",
+    "name": "IGN",
+    "category": "游戏",
+    "url": "https://x.com/IGN",
+    "difficulty": "四级友好",
+    "description": "综合游戏与影视快讯，以短句摘要为主，容易读懂并积累兴趣词汇。"
+  },
+  {
+    "handle": "geoffkeighley",
+    "name": "Geoff Keighley",
+    "category": "游戏",
+    "url": "https://x.com/geoffkeighley",
+    "difficulty": "四级友好",
+    "description": "TGA 游戏大赏创始人，推送新游发布与行业动态，公告型英文表达简洁直观。"
+  },
+  {
+    "handle": "pitchfork",
+    "name": "Pitchfork",
+    "category": "音乐",
+    "url": "https://x.com/pitchfork",
+    "difficulty": "中级过渡",
+    "description": "权威音乐评论媒体，乐评中的情感、风格与形容词表达非常丰富。"
+  },
+  {
+    "handle": "Spotify",
+    "name": "Spotify",
+    "category": "音乐",
+    "url": "https://x.com/Spotify",
+    "difficulty": "入门友好",
+    "description": "流媒体音乐官方账号，句式轻松幽默、贴近流行音乐与日常口语。"
+  },
+  {
+    "handle": "Genius",
+    "name": "Genius",
+    "category": "音乐",
+    "url": "https://x.com/Genius",
+    "difficulty": "四级友好",
+    "description": "歌词解析与音乐文化账号，适合学习流行音乐背景、惯用语与文化俚语。"
+  },
+  {
+    "handle": "JamesClear",
+    "name": "James Clear",
+    "category": "生活",
+    "url": "https://x.com/JamesClear",
+    "difficulty": "入门友好",
+    "description": "《原子习惯》作者，经常发短小精炼的生活习惯与思考金句，最适合英语起步背诵。"
+  },
+  {
+    "handle": "MerriamWebster",
+    "name": "Merriam-Webster",
+    "category": "生活",
+    "url": "https://x.com/MerriamWebster",
+    "difficulty": "入门友好",
+    "description": "韦氏词典官方账号，用幽默方式科普每日一词和常见英语用法，天然适合学词汇。"
+  },
+  {
+    "handle": "bonappetit",
+    "name": "Bon Appétit",
+    "category": "生活",
+    "url": "https://x.com/bonappetit",
+    "difficulty": "四级友好",
+    "description": "美食与厨房生活杂志，涵盖大量日常烹饪、食材、味道与生活类高频词汇。"
+  }
+]

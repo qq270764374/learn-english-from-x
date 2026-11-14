@@ -1,0 +1,65 @@
+[
+  {
+    "id": "demo-ai-1",
+    "url": "https://x.com/karpathy/status/1000001",
+    "author_handle": "karpathy",
+    "author_name": "Andrej Karpathy",
+    "text": "The new workflow feels subtle at first, but once you figure out how to delegate small tasks to an assistant, your momentum compounds fast.",
+    "created_at": "2026-11-10T10:00:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-tech-2",
+    "url": "https://x.com/MKBHD/status/1000002",
+    "author_handle": "MKBHD",
+    "author_name": "Marques Brownlee",
+    "text": "Ngl this battery life is genuinely impressive. Even after heavy camera testing, it held up until midnight without breaking a sweat.",
+    "created_at": "2026-11-10T12:30:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-game-3",
+    "url": "https://x.com/pcgamer/status/1000003",
+    "author_handle": "pcgamer",
+    "author_name": "PC Gamer",
+    "text": "The latest patch buffed stealth builds and nerfed overpowered ranged weapons, so players finally have to adapt their tactics.",
+    "created_at": "2026-11-11T08:15:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-music-4",
+    "url": "https://x.com/pitchfork/status/1000004",
+    "author_handle": "pitchfork",
+    "author_name": "Pitchfork",
+    "text": "Her debut album blends nostalgic acoustic melodies with crisp electronic beats—an underrated gem you can binge-listen all weekend.",
+    "created_at": "2026-11-11T15:40:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-life-5",
+    "url": "https://x.com/JamesClear/status/1000005",
+    "author_handle": "JamesClear",
+    "author_name": "James Clear",
+    "text": "Consistency beats intensity. When you feel overwhelmed, scale down the habit until it is effortless to show up every day.",
+    "created_at": "2026-11-12T07:00:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-ai-6",
+    "url": "https://x.com/emollick/status/1000006",
+    "author_handle": "emollick",
+    "author_name": "Ethan Mollick",
+    "text": "Tbh the biggest hurdle is not the technology itself, it is getting teams to iterate on their everyday habits and verify results.",
+    "created_at": "2026-11-12T09:20:00Z",
+    "source_page": "demo"
+  },
+  {
+    "id": "demo-life-7",
+    "url": "https://x.com/bonappetit/status/1000007",
+    "author_handle": "bonappetit",
+    "author_name": "Bon Appétit",
+    "text": "Simmer the broth slowly so the flavors deepen—patience is the secret ingredient that turns leftover vegetables into a cozy dinner.",
+    "created_at": "2026-11-12T11:45:00Z",
+    "source_page": "demo"
+  }
+]
